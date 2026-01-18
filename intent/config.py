@@ -26,7 +26,7 @@ def load_raw_intent(path: Path) -> dict:
 
     python_section = data.get("python")
     if not isinstance(python_section, dict):
-        raise IndentationError("Missing [python] table in intent.toml")
+        raise IntentConfigError("Missing [python] table in intent.toml")
     
     version = python_section.get("version")
     if not isinstance(version, str):
