@@ -1,0 +1,17 @@
+# intent.toml
+
+# [project]
+# name = "demo"
+
+[python]
+version = "3.12"
+
+[commands]
+test = "pytest -q"
+lint = "ruff check ."
+
+# [ci]
+# commands = ["test", "lint"]
+
+# [justfile]
+# enable = true
