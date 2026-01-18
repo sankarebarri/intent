@@ -4,6 +4,7 @@ from pathlib import Path
 import typer
 
 from .config import IntentConfigError, load_intent
+from .pyproject_reader import read_pyproject_python
 
 app = typer.Typer(help="Intent tool CLI (MVP stub)")
 
@@ -20,13 +21,21 @@ def main(intent_path: str = "intent.toml") -> None:
         typer.echo(f"Config error: {e}", err=True)
         raise typer.Exit(code=1)
     
+    # from intent.toml (if any)
     typer.echo(f"Python version: {cfg.python_version}")
     typer.echo(f"Commands:")
     for name, cmd in cfg.commands.items():
         typer.echo(f"   {name} -> {cmd}")
 
+    # from pyproject.toml (if any)
+    pyproject_version = read_pyproject_python()
+    if pyproject_version is None:
+        typer.echo("pyproject: requires-python not found")
+    else:
+        typer.echo(f"pyproject requires-python: {pyproject_version}")
+
 # def run() -> None:
 #     app()
 
 if __name__ == "__main__":
-    type.run(main)
+    typer.run(main)
