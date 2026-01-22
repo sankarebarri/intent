@@ -10,6 +10,7 @@ from .pyproject_reader import read_pyproject_python
 app = typer.Typer(help="Intent CLI")
 
 from .render_ci import render_ci
+from .render_just import render_just
 
 def _parse_version(version: str) -> tuple[int, ...] | None:
     """
@@ -83,7 +84,11 @@ def callback():
 
 
 @app.command()
-def sync(intent_path: str = "intent.toml", show_ci: bool = False) -> None:
+def sync(
+        intent_path: str = "intent.toml",
+        show_ci: bool = False,
+        show_just: bool = False
+    )-> None:
     """
     Main command for now: show config + Python versions.
     Later: will generate CI + justfile.
@@ -153,6 +158,10 @@ def sync(intent_path: str = "intent.toml", show_ci: bool = False) -> None:
     if show_ci:
         typer.echo("\n--- ci.yml (preview) ---\n")
         typer.echo(render_ci(cfg))
+
+    # justfile preview (optional)
+    typer.echo("\n--- justfile (preview) ---\n")
+    typer.echo(render_just(cfg))
 
 
 if __name__ == "__main__":
