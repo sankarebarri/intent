@@ -9,6 +9,8 @@ from .pyproject_reader import read_pyproject_python
 
 app = typer.Typer(help="Intent CLI")
 
+from .render_ci import render_ci
+
 def _parse_version(version: str) -> tuple[int, ...] | None:
     """
     Parse a version string like '3.12 into a tuple (3, 12).
@@ -81,7 +83,7 @@ def callback():
 
 
 @app.command()
-def sync(intent_path: str = "intent.toml") -> None:
+def sync(intent_path: str = "intent.toml", show_ci: bool = False) -> None:
     """
     Main command for now: show config + Python versions.
     Later: will generate CI + justfile.
@@ -107,44 +109,51 @@ def sync(intent_path: str = "intent.toml") -> None:
     pyproject_version = read_pyproject_python()
     if pyproject_version is None:
         typer.echo("pyproject: requires_python not found")
-        return
-    
-    typer.echo(f"pyproject requires_python: {pyproject_version}")
-
-    # simple consistency check (only for specs)
-    spec = pyproject_version.strip()
-    
-    # Case 1: simple spec (no range operators) → strict equality
-    if not any(ch in spec for ch in "<>,="):
-        if spec != cfg.python_version:
-            typer.echo(
-                "Version mismatch (simple spec):\n"
-                f"  intent.toml python.version = {cfg.python_version}\n"
-                f"  pyproject.toml requires_python = {spec}",
-            )
-            raise typer.Exit(code=1)
-        return
-    
-    # Case 2: range-like spec → try a basic best-effort check
-    result = _check_requires_python_range(cfg.python_version, spec)
-    if result is True:
-        typer.echo(
-            f"Version check (range): {cfg.python_version} appears to satisfy "
-            f"requires_python = {spec} (basic check)"
-        )
-    elif result is False:
-        typer.echo(
-            "Version mismatch:\n"
-            f"  intent.toml python.version = {cfg.python_version}\n"
-            f"  pyproject.toml requires_python = {spec}",
-            err=True,
-        )
-        raise typer.Exit(code=1)
     else:
-        typer.echo(
-            "note: requires_python uses a complex or unsupported pattern; "
-            "skipping detailed compatibility check for now"
-        )
+        typer.echo(f"pyproject requires_python: {pyproject_version}")
+
+        # Consistency checks
+        spec = pyproject_version.strip()
+
+        # Case 1: simple spec (no range operators) → strict equality
+        if not any(ch in spec for ch in "<>,="):
+            if spec != cfg.python_version:
+                typer.echo(
+                    "Version mismatch (simple spec):\n"
+                    f"  intent.toml python.version = {cfg.python_version}\n"
+                    f"  pyproject.toml requires_python = {spec}",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            # no return here: allow show_ci to run
+
+        # Case 2: range-like spec → try a basic best-effort check
+        else:
+            result = _check_requires_python_range(cfg.python_version, spec)
+            if result is True:
+                typer.echo(
+                    f"Version check (range): {cfg.python_version} appears to satisfy "
+                    f"requires_python = {spec} (basic check)"
+                )
+            elif result is False:
+                typer.echo(
+                    "Version mismatch (range):\n"
+                    f"  intent.toml python.version = {cfg.python_version}\n"
+                    f"  pyproject.toml requires_python = {spec}",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            else:
+                typer.echo(
+                    "note: requires_python uses a complex or unsupported pattern; "
+                    "skipping detailed compatibility check for now"
+                )
+
+    # CI preview (optional)
+    if show_ci:
+        typer.echo("\n--- ci.yml (preview) ---\n")
+        typer.echo(render_ci(cfg))
+
 
 if __name__ == "__main__":
     app()
