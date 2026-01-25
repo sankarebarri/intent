@@ -1,15 +1,13 @@
 # Intent
 
-**Intent** is a small coordination tool for Python projects.
+`intent` is a small, safety-first tool for keeping project configuration in sync
+by generating tool-owned files from a single source of truth.
 
-It defines *project intent once* and projects it safely into other files such as:
-
-* GitHub Actions CI workflows
-* `justfile` command runners
+It refuses to overwrite user-managed files, guarantees idempotent and atomic
+writes, and is intentionally boring by design,
 
 while **strictly respecting ownership of existing tools** like `pyproject.toml`.
 
-Intent is intentionally boring, explicit, and safe.
 
 ---
 
