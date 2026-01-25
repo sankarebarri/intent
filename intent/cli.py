@@ -3,15 +3,30 @@ from __future__ import annotations
 from pathlib import Path
 
 import typer
+from . import __version__
 
 from .config import IntentConfigError, load_intent
 from .pyproject_reader import read_pyproject_python
 
-app = typer.Typer(help="Intent CLI")
-
 from .render_ci import render_ci
 from .render_just import render_just
-from intent.fs import OwnershipError, write_generated_file
+from .fs import OwnershipError, write_generated_file
+
+app = typer.Typer(help="Intent CLI", invoke_without_command=True)
+
+@app.callback()
+def _root(
+    ctx: typer.Context,
+    version: bool = typer.Option(
+        False,
+        "--version",
+        help="Show version and exit",
+        is_eager=True
+    )
+) -> None:
+    if version:
+        typer.echo(__version__)
+        raise typer.Exit(code=0)
 
 def _parse_version(version: str) -> tuple[int, ...] | None:
     """
@@ -76,12 +91,6 @@ def _check_requires_python_range(intent_version: str, spec: str) -> bool | None:
     if not supported:
         return None
     return ok
-
-
-@app.callback()
-def callback():
-    """Intent CLI"""
-    pass
 
 
 @app.command()
@@ -191,6 +200,8 @@ def sync(
         else:
             typer.echo(f"No changes to {just_path}")
 
+def main() -> None:
+    app()
 
 if __name__ == "__main__":
-    app()
+    main()

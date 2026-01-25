@@ -1,4 +1,36 @@
 [project]
 name = "intent"
-version = "0.1.0"
-requires-python = "~=3.9"
+version = "0.0.1"
+description = "Safety-first tool to generate tool-owned project files from intent.toml"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+authors = [{ name = "sankarebarri" }]
+keywords = ["ci", "justfile", "config", "generator", "devtools"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "typer>=0.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "build>=1.0", "twine>=5.0"]
+
+[project.urls]
+Repository = "https://github.com/sankarebarri/intent"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["intent"]
+
+[project.scripts]
+intent = "intent.cli:main"

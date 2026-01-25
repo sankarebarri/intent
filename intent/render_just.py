@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from intent.config import IntentConfig
+from .config import IntentConfig
 
 
 def render_just(cfg: IntentConfig) -> str:

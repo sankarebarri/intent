@@ -14,3 +14,5 @@ ROADMAP.md
 
 .github/
 justfile
+
+*.egg-info
