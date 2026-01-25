@@ -17,7 +17,7 @@ class OwnershipError(RuntimeError):
         return f"{self.path}: {self.message}"
     
 
-def _is_tool_owned(text: str, marker: str = GENERATED_MARKER) -> boo:
+def _is_tool_owned(text: str, marker: str = GENERATED_MARKER) -> bool:
     return marker in text
 
 

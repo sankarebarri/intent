@@ -11,6 +11,7 @@ app = typer.Typer(help="Intent CLI")
 
 from .render_ci import render_ci
 from .render_just import render_just
+from intent.fs import OwnershipError, write_generated_file
 
 def _parse_version(version: str) -> tuple[int, ...] | None:
     """
@@ -87,7 +88,8 @@ def callback():
 def sync(
         intent_path: str = "intent.toml",
         show_ci: bool = False,
-        show_just: bool = False
+        show_just: bool = False,
+        write: bool = False,
     )-> None:
     """
     Main command for now: show config + Python versions.
@@ -160,8 +162,34 @@ def sync(
         typer.echo(render_ci(cfg))
 
     # justfile preview (optional)
-    typer.echo("\n--- justfile (preview) ---\n")
-    typer.echo(render_just(cfg))
+    if show_just:
+        typer.echo("\n--- justfile (preview) ---\n")
+        typer.echo(render_just(cfg))
+
+    # write-file
+    if write:
+        ci_path = Path(".github/workflows/ci.yml")
+        just_path = Path("justfile")
+
+        ci_content = render_ci(cfg)
+        just_content = render_just(cfg)
+
+        try:
+            ci_changed = write_generated_file(ci_path, ci_content)
+            just_changed = write_generated_file(just_path, just_content)
+        except OwnershipError as e:
+            typer.echo(str(e), err=True)
+            raise typer.Exit(code=1)
+        
+        if ci_changed:
+            typer.echo(f"Wrote {ci_path}")
+        else:
+            typer.echo(f"No changes to {ci_path}")
+
+        if just_changed:
+            typer.echo(f"Wrote {just_path}")
+        else:
+            typer.echo(f"No changes to {just_path}")
 
 
 if __name__ == "__main__":

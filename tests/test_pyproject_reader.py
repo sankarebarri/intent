@@ -45,3 +45,6 @@ def test_read_pyproject_python_requires_python_not_string(tmp_path: Path) -> Non
         requires-python = 3.12
         """,
     )
+
+    result = read_pyproject_python(path)
+    assert result is None
