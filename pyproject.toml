@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "build>=1.0", "twine>=5.0"]
+dev = ["pytest>=8", "ruff", "build>=1.0", "twine>=5.0"]
 
 [project.urls]
 Repository = "https://github.com/sankarebarri/intent"
