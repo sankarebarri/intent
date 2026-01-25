@@ -46,3 +46,36 @@ def test_load_intent_missing_python(tmp_path: Path) -> None:
 
     # our config.py raises: "Missing [python] table in content.toml"
     assert "Missing [python]" in str(excinfo.value)
+
+
+def test_load_intent_ci_install_default(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+        """,
+    )
+    cfg = load_intent(path)
+    assert cfg.ci_install == "-e .[dev]"
+
+
+def test_load_intent_ci_install_custom(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [ci]
+        install = ".[dev]"
+        """,
+    )
+    cfg = load_intent(path)
+    assert cfg.ci_install == ".[dev]"

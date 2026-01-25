@@ -15,3 +15,11 @@ lint = "ruff check ."
 
 # [justfile]
 # enable = true
+
+[ci]
+install = "-e .[dev]"
+
+# we can do later
+#[ci]
+#install = ["pip install -e .[dev]", "pip install nodejs"]
+#extras = ["dev", "lint"]

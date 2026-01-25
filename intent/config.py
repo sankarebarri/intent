@@ -6,6 +6,8 @@ import tomllib
 from dataclasses import dataclass
 from typing import Dict
 
+DEFAULT_CI_INSTALL = "-e .[dev]"
+
 class IntentConfigError(Exception):
     """Config error in intent.toml"""
     pass
@@ -15,6 +17,7 @@ class IntentConfigError(Exception):
 class IntentConfig:
     python_version: str
     commands: Dict[str, str]
+    ci_install: str = DEFAULT_CI_INSTALL
 
 
 def load_raw_intent(path: Path) -> dict:
@@ -66,8 +69,20 @@ def load_intent(path: Path) -> IntentConfig:
     python_version = python_section["version"]
     commands = dict(commands_section)
 
+    ci_install = DEFAULT_CI_INSTALL
+    ci_section = data.get("ci")
+    if ci_section is not None:
+        if not isinstance(ci_section, dict):
+            raise IntentConfigError("Invalid [ci] table: must be a table/object")
+        raw_install = ci_section.get("install")
+        if raw_install is not None:
+            if not isinstance(raw_install, str) or not raw_install.strip():
+                raise IntentConfigError("[ci].install must be a non-empty string")
+            ci_install = raw_install.strip()
+
     return IntentConfig(
         python_version=python_version,
         commands=commands,
+        ci_install=ci_install
     )
 
