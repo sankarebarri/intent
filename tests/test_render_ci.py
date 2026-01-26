@@ -1,8 +1,17 @@
-from pathlib import Path
-from intent.config import IntentConfig
-from intent.render_ci import render_ci
+from pathlib import (
+    Path,
+)
+from intent.config import (
+    IntentConfig,
+)
+from intent.render_ci import (
+    render_ci,
+)
 
-def test_render_ci_includes_install_step(tmp_path: Path) -> None:
+
+def test_render_ci_includes_install_step(
+    tmp_path: Path,
+) -> None:
     cfg = IntentConfig(
         python_version="3.12",
         commands={"test": "pytest -q"},

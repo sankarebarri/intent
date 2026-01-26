@@ -1,5 +1,9 @@
-from intent.config import IntentConfig
-from intent.render_just import render_just
+from intent.config import (
+    IntentConfig,
+)
+from intent.render_just import (
+    render_just,
+)
 
 
 def test_render_just_contains_header_and_default() -> None:
