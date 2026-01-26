@@ -20,11 +20,14 @@ def render_just(cfg: IntentConfig) -> str:
 
     # Optional: a default recipe to list available commands
     lines.append("default:")
-    lines.append('    @just --list')
+    lines.append("    @just --list")
     lines.append("")
 
     # One recipe per command
-    for name, cmd in cfg.commands.items():
+    for (
+        name,
+        cmd,
+    ) in cfg.commands.items():
         lines.append(f"{name}:")
         lines.append(f"    {cmd}")
         lines.append("")
