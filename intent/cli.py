@@ -11,15 +11,19 @@ from .pyproject_reader import read_pyproject_python
 from .render_ci import render_ci
 from .render_just import render_just
 
-app = typer.Typer(help="Intent CLI")
+app = typer.Typer(help="Intent CLI", invoke_without_command=True)
 
 
 @app.callback()
 def _root(
+    ctx: typer.Context,
     version: bool = typer.Option(False, "--version", help="Show version and exit", is_eager=True),
 ) -> None:
     if version:
         typer.echo(__version__)
+        raise typer.Exit(code=0)
+    if ctx.invoked_subcommand is None and not version:
+        typer.echo(ctx.get_help())
         raise typer.Exit(code=0)
 
 
@@ -109,11 +113,32 @@ def _generated_drift_status(path: Path, new_content: str) -> tuple[bool, str]:
     return (True, f"{path} is up to date")
 
 
+def _max_lower_bound(constraints: list[str]) -> tuple[int, ...] | None:
+    """
+    Return the *largest* >= bound found in constraints, e.g.
+    [">=3.10", ">=3.12", "<3.13"] -> (3, 12)
+    """
+    best: tuple[int, ...] | None = None
+    for c in constraints:
+        c = c.strip()
+        if c.startswith(">="):
+            bound = _parse_version(c[2:].strip())
+            if bound is None:
+                continue
+            if best is None or bound > best:
+                best = bound
+    return best
+
+
 def _check_versions(cfg_python: str, strict: bool) -> tuple[bool, str]:
     """
-    Compare intent.toml python.version with pyproject.toml requires_python.
+    Compare intent.toml python.version with pyproject.toml requires-python.
 
     Returns: (ok, message)
+
+    Semantics:
+    - If incompatible -> fail
+    - If compatible but pyproject is broader than intent -> warn (or fail if strict)
     """
     pyproject_version = read_pyproject_python()
     if pyproject_version is None:
@@ -127,17 +152,36 @@ def _check_versions(cfg_python: str, strict: bool) -> tuple[bool, str]:
             return True, f"pyproject requires_python matches intent ({spec})"
         return False, f"Version mismatch (simple spec): intent={cfg_python} vs pyproject={spec}"
 
-    # Range-ish spec: best-effort check
+    # Range-ish spec: best-effort check for compatibility
     result = _check_requires_python_range(cfg_python, spec)
-    if result is True:
-        return True, f"Version ok (range): intent {cfg_python} satisfies {spec}"
     if result is False:
         return False, f"Version mismatch (range): intent {cfg_python} does not satisfy {spec}"
+    if result is None:
+        if strict:
+            return False, f"Unsupported requires_python spec (strict): {spec}"
+        return True, f"Unsupported requires_python spec (skipping): {spec}"
 
-    # Unsupported pattern
-    if strict:
-        return False, f"Unsupported requires_python spec (strict): {spec}"
-    return True, f"Unsupported requires_python spec (skipping): {spec}"
+    # Here: compatible (result is True). Now enforce "precision drift" detection.
+    intent_parsed = _parse_version(cfg_python)
+    if intent_parsed is None:
+        # shouldn't happen with validated intent.toml, but keep safe
+        return True, f"note: could not parse intent python.version ({cfg_python})"
+
+    constraints = [c.strip() for c in spec.split(",") if c.strip()]
+    lower = _max_lower_bound(constraints)
+
+    # If we can read a >= lower bound and it's *less* than intent, pyproject is broader.
+    # Example: intent 3.12, pyproject >=2 or >=3.10
+    if lower is not None and lower < intent_parsed:
+        msg = (
+            f"pyproject requires_python ({spec}) is broader than intent ({cfg_python}); "
+            "consider tightening pyproject to match intent"
+        )
+        if strict:
+            return False, msg
+        return True, f"note: {msg}"
+
+    return True, f"Version ok (range): intent {cfg_python} satisfies {spec}"
 
 
 @app.command()
@@ -175,15 +219,9 @@ def sync(
     for name, cmd in cfg.commands.items():
         typer.echo(f"  {name} -> {cmd}")
 
-    (
-        ok_versions,
-        msg_versions,
-    ) = _check_versions(
-        cfg.python_version,
-        strict=False,
-    )
-    if "Unsupported" in msg_versions:
-        typer.echo(f"note: {msg_versions}")
+    ok_versions, msg_versions = _check_versions(cfg.python_version, strict=False)
+    if msg_versions.startswith("note:"):
+        typer.echo(msg_versions)
     else:
         typer.echo(msg_versions)
 
@@ -202,35 +240,16 @@ def sync(
 
     if dry_run:
         typer.echo("\n--- dry-run ---")
-        typer.echo(
-            _preview_status(
-                ci_path,
-                ci_content,
-            )
-        )
-        typer.echo(
-            _preview_status(
-                just_path,
-                just_content,
-            )
-        )
+        typer.echo(_preview_status(ci_path, ci_content))
+        typer.echo(_preview_status(just_path, just_content))
         raise typer.Exit(code=0)
 
     if write:
         try:
-            ci_changed = write_generated_file(
-                ci_path,
-                ci_content,
-            )
-            just_changed = write_generated_file(
-                just_path,
-                just_content,
-            )
+            ci_changed = write_generated_file(ci_path, ci_content)
+            just_changed = write_generated_file(just_path, just_content)
         except OwnershipError as e:
-            typer.echo(
-                str(e),
-                err=True,
-            )
+            typer.echo(str(e), err=True)
             raise typer.Exit(code=1)
 
         typer.echo(f"Wrote {ci_path}" if ci_changed else f"No changes to {ci_path}")
@@ -238,10 +257,7 @@ def sync(
 
 
 @app.command()
-def check(
-    intent_path: str = "intent.toml",
-    strict: bool = False,
-) -> None:
+def check(intent_path: str = "intent.toml", strict: bool = False) -> None:
     """
     Check drift without writing.
 
@@ -255,16 +271,10 @@ def check(
     try:
         cfg = load_intent(path)
     except FileNotFoundError as e:
-        typer.echo(
-            f"Error: {e}",
-            err=True,
-        )
+        typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=2)
     except IntentConfigError as e:
-        typer.echo(
-            f"Config error: {e}",
-            err=True,
-        )
+        typer.echo(f"Config error: {e}", err=True)
         raise typer.Exit(code=2)
 
     drift = False
@@ -272,64 +282,37 @@ def check(
     (
         ok_versions,
         msg_versions,
-    ) = _check_versions(
-        cfg.python_version,
-        strict=strict,
-    )
+    ) = _check_versions(cfg.python_version, strict=strict)
     if not ok_versions:
         drift = True
-        typer.echo(
-            f"✗ {msg_versions}",
-            err=True,
-        )
+        typer.echo(f"✗ {msg_versions}", err=True)
     else:
         # show as note if unsupported but not strict
-        if msg_versions.startswith("Unsupported"):
-            typer.echo(f"note: {msg_versions}")
+        if msg_versions.startswith("note:"):
+            typer.echo(msg_versions)
         else:
             typer.echo(f"✓ {msg_versions}")
 
     ci_path = Path(".github/workflows/ci.yml")
     just_path = Path("justfile")
 
-    (
-        ci_ok,
-        ci_msg,
-    ) = _generated_drift_status(
-        ci_path,
-        render_ci(cfg),
-    )
-    (
-        just_ok,
-        just_msg,
-    ) = _generated_drift_status(
-        just_path,
-        render_just(cfg),
-    )
+    ci_ok, ci_msg = _generated_drift_status(ci_path, render_ci(cfg))
+    just_ok, just_msg = _generated_drift_status(just_path, render_just(cfg))
 
     if ci_ok:
         typer.echo(f"✓ {ci_msg}")
     else:
         drift = True
-        typer.echo(
-            f"✗ {ci_msg}",
-            err=True,
-        )
+        typer.echo(f"✗ {ci_msg}", err=True)
 
     if just_ok:
         typer.echo(f"✓ {just_msg}")
     else:
         drift = True
-        typer.echo(
-            f"✗ {just_msg}",
-            err=True,
-        )
+        typer.echo(f"✗ {just_msg}", err=True)
 
     if drift:
-        typer.echo(
-            "\nHint: run `intent sync --write` to update generated files.",
-            err=True,
-        )
+        typer.echo("\nHint: run `intent sync --write` to update generated files.", err=True)
         raise typer.Exit(code=1)
 
     raise typer.Exit(code=0)

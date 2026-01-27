@@ -3,7 +3,7 @@ name = "intent"
 version = "0.0.1"
 description = "Safety-first tool to generate tool-owned project files from intent.toml"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [{ name = "sankarebarri" }]
 keywords = ["ci", "justfile", "config", "generator", "devtools"]
