@@ -1,69 +1,47 @@
 # Intent
 
-`intent` is a small, safety-first tool for keeping project configuration in sync
-by generating tool-owned files from a single source of truth.
+Intent is a small, boring tool that keeps project config in sync by generating tool-owned files from a single `intent.toml`.
 
-It refuses to overwrite user-managed files, guarantees idempotent and atomic
-writes, and is intentionally boring by design,
+## Who it's for
 
-while **strictly respecting ownership of existing tools** like `pyproject.toml`.
+*   **Teams** that want one source of truth for Python versions and common commands.
+*   **Projects** that want safe, repeatable generation of CI workflows and Justfiles.
 
+## Files
 
----
+*   **You edit:** `intent.toml`
+*   **Intent reads:** `pyproject.toml`
+*   **Intent writes:** `.github/workflows/ci.yml`, `justfile`
 
-## Why Intent Exists
+## Installations
+### From PyPI
 
-Modern Python projects repeat the same information in many places:
+```bash
+python -m pip install intent
+```
 
-* Python version in `pyproject.toml`, CI, Docker, docs
-* Test and lint commands in CI, Makefiles, Justfiles, READMEs
-
-Over time, these drift.
-
-Intent solves **coordination drift**, not packaging, not builds, not dependencies.
-
----
-
-## What Intent Is
-
-* A **single source of agreement**
-* A **projection tool**, not a configuration manager
-* A **consistency governor**, not a framework
-
-You declare intent once, and Intent projects it deterministically.
-
----
-
-## What Intent Is Not
-
-Intent does **not**:
-
-* Manage dependencies
-* Replace `pyproject.toml`
-* Configure tools like `pytest`, `ruff`, or `black`
-* Guess defaults
-* Merge user-edited files
-
-If a file is not owned by Intent, Intent will not touch it.
-
----
-
-## Core Concepts
-
-### Intent File (`intent.toml`)
-
-The only file you author.
-
+## Configuration
+### Intent file(intent.toml)
+The only file you author
 ```toml
+# use to verify that versions conform all around
 [python]
 version = "3.12"
 
 [commands]
 test = "pytest -q"
 lint = "ruff check ."
+
+# used to generate and install dependencies in ci.yml
+[ci]
+install = "-e .[dev]"
+# This value is used verbatim when generating CI install steps.
+# Intent does not infer dependencies, it only reflects what you declare.
 ```
 
 This file describes **agreements**, not implementations.
+If something is not declared in `intent.toml`, Intent will not guess.
+
 
 ---
 
@@ -85,6 +63,22 @@ Intent will **never modify them**.
 
 ---
 
+### Example
+### ✅ Python version consistency
+
+```bash
+intent sync
+```
+will:
+* Read `requires-python` from `pyproject.toml`
+* Validate it against the `intent.toml` python declared version and return one of the following:
+
+  * pyproject requires_python matches intent
+  * Version mismatch (simple spec): intent=X.Y vs pyproject=A.B
+  * Unsupported requires_python spec
+
+---
+
 ### Generated Files (Tool-Owned)
 
 Intent generates files it fully owns:
@@ -99,105 +93,68 @@ These files:
 * are overwritten safely
 * refuse overwrite if user-edited
 
----
+## Usage & Commands
 
-## Features Implemented (Current State)
+All commands and what they do:
 
-### ✅ Config loading & validation
+| Command | What it does |
+| --- | --- |
+| `intent --version` | Show version and exit. |
+| `intent sync` | Read `intent.toml` and show config + version check. |
+| `intent sync --show-ci` | `intent sync` plus preview generated CI. |
+| `intent sync --show-just` | `intent sync` plus preview generated justfile. |
+| `intent sync --dry-run` | Preview what would be written (no writes). |
+| `intent sync --write` | Write tool-owned files. |
+| `intent check` | Check drift without writing (exit 0/1/2). |
+| `intent check --strict` | Check drift with strict `requires_python` parsing. |
+| `intent sync path/to/intent.toml` | Use a non-default config path for sync. |
+| `intent check path/to/intent.toml` | Use a non-default config path for check. |
 
-* Parses `intent.toml`
-* Validates required structure
-* Clear error messages
+## Notes
 
-### ✅ Python version consistency
+Expected output:
 
-* Reads `requires-python` from `pyproject.toml`
-* Supports:
+| Command | Expected output |
+| --- | --- |
+| `intent --version` | Prints version like `0.3.0`. |
+| `intent sync` | Lines like `Intent python version: 3.12`, `Intent commands:`, `test -> pytest -q`, `Version ok (range): intent 3.12 satisfies >=3.10,<3.13`. |
+| `intent sync --show-ci` | Same as `intent sync`, then `--- ci.yml (preview) ---` and rendered `ci.yml`. |
+| `intent sync --show-just` | Same as `intent sync`, then `--- justfile (preview) ---` and rendered `justfile`. |
+| `intent sync --dry-run` | `--- dry-run ---`, then `Would write .github/workflows/ci.yml` and `Would update justfile` (or `No changes to ...`). |
+| `intent sync --write` | `Wrote .github/workflows/ci.yml` and `Wrote justfile` (or `No changes to ...`). |
+| `intent check` | `✓ Version ok (range): ...`, `✓ .github/workflows/ci.yml is up to date`, `✓ justfile is up to date` (exit 1 prints `✗` lines and a hint). |
+| `intent check --strict` | Same as `intent check`, but unsupported specs are errors. |
+| `intent sync path/to/intent.toml` | Same outputs as `intent sync`, using that file. |
+| `intent check path/to/intent.toml` | Same outputs as `intent check`, using that file. |
 
-  * exact versions
-  * basic range checks
-* Skips unsupported patterns safely
+## Safety & Ownership Rules
+Intent is intentionally conservative.
 
-### ✅ CI rendering (preview + write)
+* Intent **never edits user-owned files**.
+* Intent **refuses to overwrite files** unless they contain a generated marker.
+* All generated files are clearly marked as **tool-owned**.
+* Output is **deterministic and idempotent**:
+  running the same command twice produces no changes.
+* File writes are **atomic**:
+  files are written via a temporary file and replaced safely.
 
-* Renders minimal GitHub Actions workflow
-* Projects:
-
-  * Python version
-  * declared commands
-* Deterministic output
-
-### ✅ Justfile rendering (preview + write)
-
-* Generates one recipe per command
-* Includes default recipe
-* Deterministic output
-
-### ✅ Safe, idempotent file writes
-
-* Atomic writes (POSIX-safe)
-* Ownership enforcement
-* No accidental overwrites
-
-### ✅ Test coverage
-
-* Config parsing
-* Version checks
-* CI rendering
-* Justfile rendering
-* Filesystem safety & idempotency
-
----
-
-## Usage
-
-### Preview generated files
-
-```bash
-python -m intent.cli sync --show-ci
-python -m intent.cli sync --show-just
-```
-
-### Write generated files
-
-```bash
-python -m intent.cli sync --write
-```
-
-* Writes:
-
-  * `.github/workflows/ci.yml`
-  * `justfile`
-* Refuses to overwrite user-owned files
-* Idempotent (safe to run repeatedly)
+If a file exists but is not marked as tool-owned, Intent will fail loudly instead of guessing.
 
 ---
 
-## Design Principles
+## Non-Goals
 
-* **Explicit over clever**
-* **Projection over mutation**
-* **Ownership is sacred**
-* **Idempotency by default**
-* **Fail loudly on ambiguity**
+Intent does **not**:
 
----
+* Edit existing CI workflows
+* Merge or patch user files
+* Guess dependencies
+* Perform bidirectional sync
 
-## Project Status
-
-**MVP complete.**
-
-Next possible directions (not yet implemented):
-
-* Additional projections (pre-commit, devcontainers)
-* Dry-run summaries
-* Better version spec support
-* Plugin system (carefully scoped)
-
-All future work will preserve the same boundaries.
+When in doubt, Intent refuses to act.
 
 ---
 
 ## License
 
-TBD
+MIT
