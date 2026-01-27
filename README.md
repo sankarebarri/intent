@@ -10,14 +10,21 @@ Intent is a small, boring tool that keeps project config in sync by generating t
 ## Files
 
 *   **You edit:** `intent.toml`
-*   **Intent reads:** `pyproject.toml`
-*   **Intent writes:** `.github/workflows/ci.yml`, `justfile`
+*   **Intent reads:** `intent.toml`, `pyproject.toml`
+*   **Intent writes:** tool-owned files only
+*   **Example generated files:** `.github/workflows/ci.yml`, `justfile`
 
 ## Installations
 ### From PyPI
 
 ```bash
 python -m pip install intent
+```
+
+### From source
+
+```bash
+python -m pip install -e .
 ```
 
 ## Configuration
@@ -100,12 +107,12 @@ All commands and what they do:
 | Command | What it does |
 | --- | --- |
 | `intent --version` | Show version and exit. |
-| `intent sync` | Read `intent.toml` and show config + version check. |
+| `intent sync` | Read `intent.toml` + `pyproject.toml` and show config + version check. |
 | `intent sync --show-ci` | `intent sync` plus preview generated CI. |
 | `intent sync --show-just` | `intent sync` plus preview generated justfile. |
 | `intent sync --dry-run` | Preview what would be written (no writes). |
 | `intent sync --write` | Write tool-owned files. |
-| `intent check` | Check drift without writing (exit 0/1/2). |
+| `intent check` | Check drift without writing. |
 | `intent check --strict` | Check drift with strict `requires_python` parsing. |
 | `intent sync path/to/intent.toml` | Use a non-default config path for sync. |
 | `intent check path/to/intent.toml` | Use a non-default config path for check. |
@@ -122,7 +129,7 @@ Expected output:
 | `intent sync --show-just` | Same as `intent sync`, then `--- justfile (preview) ---` and rendered `justfile`. |
 | `intent sync --dry-run` | `--- dry-run ---`, then `Would write .github/workflows/ci.yml` and `Would update justfile` (or `No changes to ...`). |
 | `intent sync --write` | `Wrote .github/workflows/ci.yml` and `Wrote justfile` (or `No changes to ...`). |
-| `intent check` | `✓ Version ok (range): ...`, `✓ .github/workflows/ci.yml is up to date`, `✓ justfile is up to date` (exit 1 prints `✗` lines and a hint). |
+| `intent check` | `✓ Version ok (range): ...`, `✓ .github/workflows/ci.yml is up to date`, `✓ justfile is up to date`. |
 | `intent check --strict` | Same as `intent check`, but unsupported specs are errors. |
 | `intent sync path/to/intent.toml` | Same outputs as `intent sync`, using that file. |
 | `intent check path/to/intent.toml` | Same outputs as `intent check`, using that file. |
