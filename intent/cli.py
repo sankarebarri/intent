@@ -1,3 +1,4 @@
+# intent/cli.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,9 +8,10 @@ import typer
 from . import __version__
 from .config import IntentConfigError, load_intent
 from .fs import GENERATED_MARKER, OwnershipError, write_generated_file
-from .pyproject_reader import read_pyproject_python
+from .pyproject_reader import PyprojectPythonStatus, read_pyproject_python
 from .render_ci import render_ci
 from .render_just import render_just
+from .versioning import check_requires_python_range, max_lower_bound, parse_version
 
 app = typer.Typer(help="Intent CLI", invoke_without_command=True)
 
@@ -22,71 +24,13 @@ def _root(
     if version:
         typer.echo(__version__)
         raise typer.Exit(code=0)
-    if ctx.invoked_subcommand is None and not version:
+
+    if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
         raise typer.Exit(code=0)
 
 
-def _parse_version(version: str) -> tuple[int, ...] | None:
-    parts: list[int] = []
-    for part in version.split("."):
-        part = part.strip()
-        if not part:
-            break
-        if not part.isdigit():
-            return None
-        parts.append(int(part))
-    return tuple(parts) if parts else None
-
-
-def _check_requires_python_range(intent_version: str, spec: str) -> bool | None:
-    """
-    Basic, best-effort checker for patterns like:
-      '>=3.10,<3.13'
-      '>=3.11'
-      '<3.13'
-
-    Returns:
-      True  -> intent_version appears to satisfy the spec
-      False -> intent_version does NOT satisfy the spec
-      None  -> unsupported/unknown spec pattern
-    """
-    intent_parsed = _parse_version(intent_version)
-    if intent_parsed is None:
-        return None
-
-    constraints = [c.strip() for c in spec.split(",") if c.strip()]
-    if not constraints:
-        return None
-
-    supported = True
-    ok = True
-
-    for c in constraints:
-        if c.startswith(">="):
-            bound_parsed = _parse_version(c[2:].strip())
-            if bound_parsed is None:
-                supported = False
-                continue
-            if intent_parsed < bound_parsed:
-                ok = False
-        elif c.startswith("<"):
-            bound_parsed = _parse_version(c[1:].strip())
-            if bound_parsed is None:
-                supported = False
-                continue
-            if not (intent_parsed < bound_parsed):
-                ok = False
-        else:
-            supported = False
-
-    return ok if supported else None
-
-
 def _preview_status(path: Path, new_content: str) -> str:
-    """
-    Used by --dry-run and check.
-    """
     if not path.exists():
         return f"Would write {path}"
 
@@ -97,52 +41,38 @@ def _preview_status(path: Path, new_content: str) -> str:
 
 
 def _generated_drift_status(path: Path, new_content: str) -> tuple[bool, str]:
-    """
-    Used by `intent check`.
-
-    Returns: (is_ok, message)
-    """
     if not path.exists():
-        return (False, f"{path} is missing")
+        return False, f"{path} is missing"
 
     existing = path.read_text(encoding="utf-8")
     if GENERATED_MARKER not in existing:
         return False, f"{path} exists but is not tool-owned (missing marker)"
     if existing != new_content:
-        return (False, f"{path} is out of date")
-    return (True, f"{path} is up to date")
-
-
-def _max_lower_bound(constraints: list[str]) -> tuple[int, ...] | None:
-    """
-    Return the *largest* >= bound found in constraints, e.g.
-    [">=3.10", ">=3.12", "<3.13"] -> (3, 12)
-    """
-    best: tuple[int, ...] | None = None
-    for c in constraints:
-        c = c.strip()
-        if c.startswith(">="):
-            bound = _parse_version(c[2:].strip())
-            if bound is None:
-                continue
-            if best is None or bound > best:
-                best = bound
-    return best
+        return False, f"{path} is out of date"
+    return True, f"{path} is up to date"
 
 
 def _check_versions(cfg_python: str, strict: bool) -> tuple[bool, str]:
     """
-    Compare intent.toml python.version with pyproject.toml requires-python.
-
-    Returns: (ok, message)
-
     Semantics:
     - If incompatible -> fail
     - If compatible but pyproject is broader than intent -> warn (or fail if strict)
     """
-    pyproject_version = read_pyproject_python()
+    status, pyproject_version = read_pyproject_python()
+
+    if status == PyprojectPythonStatus.FILE_MISSING:
+        return True, "note: pyproject.toml not found; version cross-check skipped"
+    if status == PyprojectPythonStatus.PROJECT_MISSING:
+        return True, "note: pyproject.toml has no [project] table; version cross-check skipped"
+    if status == PyprojectPythonStatus.REQUIRES_PYTHON_MISSING:
+        return True, "note: [project].requires-python not set; version cross-check skipped"
+    if status == PyprojectPythonStatus.INVALID:
+        if strict:
+            return False, "invalid requires-python value in pyproject.toml"
+        return True, "note: invalid requires-python value; version cross-check skipped"
+
     if pyproject_version is None:
-        return (True, "pyproject: requires_python not found (skipping)")
+        return True, "note: [project].requires-python not set; version cross-check skipped"
 
     spec = pyproject_version.strip()
 
@@ -152,26 +82,23 @@ def _check_versions(cfg_python: str, strict: bool) -> tuple[bool, str]:
             return True, f"pyproject requires_python matches intent ({spec})"
         return False, f"Version mismatch (simple spec): intent={cfg_python} vs pyproject={spec}"
 
-    # Range-ish spec: best-effort check for compatibility
-    result = _check_requires_python_range(cfg_python, spec)
+    # Range-ish spec: best-effort compatibility check
+    result = check_requires_python_range(cfg_python, spec)
     if result is False:
         return False, f"Version mismatch (range): intent {cfg_python} does not satisfy {spec}"
     if result is None:
         if strict:
             return False, f"Unsupported requires_python spec (strict): {spec}"
-        return True, f"Unsupported requires_python spec (skipping): {spec}"
+        return True, f"note: Unsupported requires_python spec (skipping): {spec}"
 
-    # Here: compatible (result is True). Now enforce "precision drift" detection.
-    intent_parsed = _parse_version(cfg_python)
+    # Compatible. Now detect "precision drift": pyproject broader than intent.
+    intent_parsed = parse_version(cfg_python)
     if intent_parsed is None:
-        # shouldn't happen with validated intent.toml, but keep safe
         return True, f"note: could not parse intent python.version ({cfg_python})"
 
     constraints = [c.strip() for c in spec.split(",") if c.strip()]
-    lower = _max_lower_bound(constraints)
+    lower = max_lower_bound(constraints)
 
-    # If we can read a >= lower bound and it's *less* than intent, pyproject is broader.
-    # Example: intent 3.12, pyproject >=2 or >=3.10
     if lower is not None and lower < intent_parsed:
         msg = (
             f"pyproject requires_python ({spec}) is broader than intent ({cfg_python}); "
@@ -213,17 +140,14 @@ def sync(
         typer.echo(f"Config error: {e}", err=True)
         raise typer.Exit(code=2)
 
-    # From intent.toml
     typer.echo(f"Intent python version: {cfg.python_version}")
     typer.echo("Intent commands:")
     for name, cmd in cfg.commands.items():
         typer.echo(f"  {name} -> {cmd}")
 
+    cfg = load_intent(path)
     ok_versions, msg_versions = _check_versions(cfg.python_version, strict=False)
-    if msg_versions.startswith("note:"):
-        typer.echo(msg_versions)
-    else:
-        typer.echo(msg_versions)
+    typer.echo(msg_versions)
 
     ci_path = Path(".github/workflows/ci.yml")
     just_path = Path("justfile")
@@ -279,15 +203,11 @@ def check(intent_path: str = "intent.toml", strict: bool = False) -> None:
 
     drift = False
 
-    (
-        ok_versions,
-        msg_versions,
-    ) = _check_versions(cfg.python_version, strict=strict)
+    ok_versions, msg_versions = _check_versions(cfg.python_version, strict=strict)
     if not ok_versions:
         drift = True
         typer.echo(f"✗ {msg_versions}", err=True)
     else:
-        # show as note if unsupported but not strict
         if msg_versions.startswith("note:"):
             typer.echo(msg_versions)
         else:

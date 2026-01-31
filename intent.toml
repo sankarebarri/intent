@@ -4,7 +4,7 @@
 # name = "demo"
 
 [python]
-version = "3.5l"
+version = "3.12"
 
 [commands]
 test = "pytest -q"

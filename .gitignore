@@ -16,3 +16,6 @@ ROADMAP.md
 justfile
 
 *.egg-info
+
+/dist
+.pypirc
