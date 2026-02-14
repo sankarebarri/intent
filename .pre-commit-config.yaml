@@ -1,0 +1,8 @@
+repos:
+  - repo: local
+    hooks:
+      - id: intent-check
+        name: intent check
+        entry: intent check --strict
+        language: system
+        pass_filenames: false
