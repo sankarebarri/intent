@@ -111,6 +111,9 @@ All commands and what they do:
 | Command | What it does |
 | --- | --- |
 | `intent --version` | Show version and exit. |
+| `intent init` | Create a starter `intent.toml`. |
+| `intent init --from-existing` | Create `intent.toml` and infer python version from `pyproject.toml` when possible. |
+| `intent init --force` | Overwrite existing `intent.toml`. |
 | `intent sync` | Read `intent.toml` + `pyproject.toml` and show config + version check. |
 | `intent sync --show-ci` | `intent sync` plus preview generated CI. |
 | `intent sync --show-just` | `intent sync` plus preview generated justfile. |
@@ -129,6 +132,9 @@ Expected output:
 | Command | Expected output |
 | --- | --- |
 | `intent --version` | Prints version like `0.3.0`. |
+| `intent init` | Writes `intent.toml` starter template (`python=3.12`, basic commands, CI install). |
+| `intent init --from-existing` | Writes template and attempts to infer python version from `pyproject.toml` (`requires-python`). |
+| `intent init --force` | Overwrites existing `intent.toml`. |
 | `intent sync` | Lines like `Intent python version: 3.12`, `Intent commands:`, `test -> pytest -q`, `Version ok (range): intent 3.12 satisfies >=3.10,<3.13`. |
 | `intent sync --show-ci` | Same as `intent sync`, then `--- ci.yml (preview) ---` and rendered `ci.yml`. |
 | `intent sync --show-just` | Same as `intent sync`, then `--- justfile (preview) ---` and rendered `justfile`. |
@@ -150,10 +156,31 @@ Intent emits stable error codes in text output (for failures) and JSON output (`
 | `INTENT002` | Missing intent config file. |
 | `INTENT003` | Invalid intent config content. |
 | `INTENT004` | Ownership violation while writing generated files. |
+| `INTENT005` | `intent init` refused to overwrite existing file (use `--force`). |
 | `INTENT101` | Python version compatibility/spec check failure. |
 | `INTENT201` | Required generated file is missing. |
 | `INTENT202` | Generated file exists but is not tool-owned. |
 | `INTENT203` | Generated file is out of date. |
+
+## Bootstrapping (`intent init`)
+
+Create a new `intent.toml`:
+
+```bash
+intent init
+```
+
+Infer Python version from existing `pyproject.toml` (when possible):
+
+```bash
+intent init --from-existing
+```
+
+Overwrite an existing `intent.toml`:
+
+```bash
+intent init --force
+```
 
 ## Pre-commit Integration
 

@@ -25,6 +25,7 @@ ERR_USAGE_CONFLICT = "INTENT001"
 ERR_CONFIG_NOT_FOUND = "INTENT002"
 ERR_CONFIG_INVALID = "INTENT003"
 ERR_OWNERSHIP = "INTENT004"
+ERR_INIT_EXISTS = "INTENT005"
 ERR_VERSION = "INTENT101"
 ERR_FILE_MISSING = "INTENT201"
 ERR_FILE_UNOWNED = "INTENT202"
@@ -130,6 +131,83 @@ def _check_versions(cfg_python: str, strict: bool) -> tuple[bool, str, str | Non
         return True, f"note: {msg}", None
 
     return True, f"Version ok (range): intent {cfg_python} satisfies {spec}", None
+
+
+def _render_intent_template(python_version: str) -> str:
+    lines = [
+        "[python]",
+        f'version = "{python_version}"',
+        "",
+        "[commands]",
+        'test = "pytest -q"',
+        'lint = "ruff check ."',
+        "",
+        "[ci]",
+        'install = "-e .[dev]"',
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _infer_init_python_version(from_existing: bool) -> tuple[str, str]:
+    default_version = "3.12"
+    if not from_existing:
+        return default_version, "default"
+
+    status, raw = read_pyproject_python()
+    if status != PyprojectPythonStatus.OK or raw is None:
+        return default_version, "default"
+
+    spec = raw.strip()
+    if not spec:
+        return default_version, "default"
+
+    if not any(ch in spec for ch in "<>,="):
+        parsed = parse_pep440_version(spec)
+        if parsed is None:
+            return default_version, "default"
+        return f"{parsed.major}.{parsed.minor}", "pyproject"
+
+    lower = max_lower_bound(spec)
+    if lower is not None:
+        return f"{lower.major}.{lower.minor}", "pyproject"
+
+    if spec.startswith("==") and "," not in spec:
+        parsed = parse_pep440_version(spec[2:].strip())
+        if parsed is not None:
+            return f"{parsed.major}.{parsed.minor}", "pyproject"
+
+    return default_version, "default"
+
+
+@app.command()
+def init(
+    intent_path: str = "intent.toml",
+    from_existing: bool = False,
+    force: bool = False,
+) -> None:
+    """
+    Create a starter intent.toml.
+
+    --from-existing: infer python version from pyproject.toml when possible.
+    --force:         overwrite an existing intent.toml.
+    """
+    path = Path(intent_path)
+    if path.exists() and not force:
+        typer.echo(
+            f"[{ERR_INIT_EXISTS}] Refusing to overwrite existing file: {path} (use --force)",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    python_version, source = _infer_init_python_version(from_existing)
+    content = _render_intent_template(python_version)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    typer.echo(f"Wrote {path}")
+    if from_existing:
+        typer.echo(f"python.version = {python_version} ({source})")
 
 
 @app.command()
