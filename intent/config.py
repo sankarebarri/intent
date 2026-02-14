@@ -26,7 +26,10 @@ def load_raw_intent(path: Path) -> dict:
         raise FileNotFoundError(f"{path} does not exist")
 
     text = path.read_text(encoding="utf-8")
-    data = tomllib.loads(text)
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as e:
+        raise IntentConfigError(f"Invalid TOML in {path}: {e}") from e
 
     python_section = data.get("python")
     if not isinstance(python_section, dict):

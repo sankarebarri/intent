@@ -100,3 +100,71 @@ def test_check_fails_if_generated_file_exists_but_not_owned(tmp_path: Path, monk
     result = runner.invoke(app, ["check"])
     assert result.exit_code == 1
     assert "not tool-owned" in result.output
+
+
+def test_sync_dry_run_reports_unowned_existing_file(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+        """,
+    )
+
+    (tmp_path / "justfile").write_text("default:\n\t@echo user-owned\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["sync", "--dry-run"])
+    assert result.exit_code == 0
+    assert "Cannot update justfile: exists but is not tool-owned (missing marker)" in result.output
+
+
+def test_check_handles_invalid_pyproject_toml_non_strict(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    intent_path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+        """,
+    )
+
+    (tmp_path / "pyproject.toml").write_text("[project\n", encoding="utf-8")
+    cfg = load_intent(intent_path)
+    (tmp_path / ".github/workflows").mkdir(parents=True)
+    (tmp_path / ".github/workflows/ci.yml").write_text(render_ci(cfg), encoding="utf-8")
+    (tmp_path / "justfile").write_text(render_just(cfg), encoding="utf-8")
+
+    result = runner.invoke(app, ["check"])
+    assert result.exit_code == 0
+    assert "note: invalid requires-python value; version cross-check skipped" in result.output
+
+
+def test_check_handles_invalid_pyproject_toml_strict(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    intent_path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+        """,
+    )
+
+    (tmp_path / "pyproject.toml").write_text("[project\n", encoding="utf-8")
+    cfg = load_intent(intent_path)
+    (tmp_path / ".github/workflows").mkdir(parents=True)
+    (tmp_path / ".github/workflows/ci.yml").write_text(render_ci(cfg), encoding="utf-8")
+    (tmp_path / "justfile").write_text(render_just(cfg), encoding="utf-8")
+
+    result = runner.invoke(app, ["check", "--strict"])
+    assert result.exit_code == 1
+    assert "invalid requires-python value in pyproject.toml" in result.output

@@ -11,7 +11,11 @@ from .fs import GENERATED_MARKER, OwnershipError, write_generated_file
 from .pyproject_reader import PyprojectPythonStatus, read_pyproject_python
 from .render_ci import render_ci
 from .render_just import render_just
-from .versioning import check_requires_python_range, max_lower_bound, parse_version
+from .versioning import (
+    check_requires_python_range,
+    max_lower_bound,
+    parse_pep440_version,
+)
 
 app = typer.Typer(help="Intent CLI", invoke_without_command=True)
 
@@ -35,6 +39,8 @@ def _preview_status(path: Path, new_content: str) -> str:
         return f"Would write {path}"
 
     existing = path.read_text(encoding="utf-8")
+    if GENERATED_MARKER not in existing:
+        return f"Cannot update {path}: exists but is not tool-owned (missing marker)"
     if existing == new_content:
         return f"No changes to {path}"
     return f"Would update {path}"
@@ -78,7 +84,13 @@ def _check_versions(cfg_python: str, strict: bool) -> tuple[bool, str]:
 
     # Simple spec: no operators => treat as equality
     if not any(ch in spec for ch in "<>,="):
-        if spec == cfg_python:
+        spec_version = parse_pep440_version(spec)
+        cfg_version = parse_pep440_version(cfg_python)
+        if spec_version is None:
+            if strict:
+                return False, f"Unsupported requires_python spec (strict): {spec}"
+            return True, f"note: Unsupported requires_python spec (skipping): {spec}"
+        if cfg_version is not None and spec_version == cfg_version:
             return True, f"pyproject requires_python matches intent ({spec})"
         return False, f"Version mismatch (simple spec): intent={cfg_python} vs pyproject={spec}"
 
@@ -92,12 +104,10 @@ def _check_versions(cfg_python: str, strict: bool) -> tuple[bool, str]:
         return True, f"note: Unsupported requires_python spec (skipping): {spec}"
 
     # Compatible. Now detect "precision drift": pyproject broader than intent.
-    intent_parsed = parse_version(cfg_python)
+    intent_parsed = parse_pep440_version(cfg_python)
     if intent_parsed is None:
         return True, f"note: could not parse intent python.version ({cfg_python})"
-
-    constraints = [c.strip() for c in spec.split(",") if c.strip()]
-    lower = max_lower_bound(constraints)
+    lower = max_lower_bound(spec)
 
     if lower is not None and lower < intent_parsed:
         msg = (
@@ -145,7 +155,6 @@ def sync(
     for name, cmd in cfg.commands.items():
         typer.echo(f"  {name} -> {cmd}")
 
-    cfg = load_intent(path)
     ok_versions, msg_versions = _check_versions(cfg.python_version, strict=False)
     typer.echo(msg_versions)
 

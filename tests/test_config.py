@@ -100,3 +100,20 @@ def test_load_intent_ci_install_custom(
     )
     cfg = load_intent(path)
     assert cfg.ci_install == ".[dev]"
+
+
+def test_load_intent_invalid_toml(
+    tmp_path: Path,
+) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python
+        version = "3.12"
+        """,
+    )
+
+    with pytest.raises(IntentConfigError) as excinfo:
+        load_intent(path)
+
+    assert "Invalid TOML" in str(excinfo.value)

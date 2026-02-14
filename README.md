@@ -82,7 +82,11 @@ will:
 
   * pyproject requires_python matches intent
   * Version mismatch (simple spec): intent=X.Y vs pyproject=A.B
-  * Unsupported requires_python spec
+  * Version ok (range): intent X.Y satisfies SPEC
+  * Unsupported requires_python spec (only for invalid spec strings)
+
+Intent uses `packaging` for `requires-python` evaluation, so common specifiers like
+`~=`, `==`, `!=`, `<=`, `>=`, and range combinations are supported.
 
 ---
 
@@ -127,7 +131,7 @@ Expected output:
 | `intent sync` | Lines like `Intent python version: 3.12`, `Intent commands:`, `test -> pytest -q`, `Version ok (range): intent 3.12 satisfies >=3.10,<3.13`. |
 | `intent sync --show-ci` | Same as `intent sync`, then `--- ci.yml (preview) ---` and rendered `ci.yml`. |
 | `intent sync --show-just` | Same as `intent sync`, then `--- justfile (preview) ---` and rendered `justfile`. |
-| `intent sync --dry-run` | `--- dry-run ---`, then `Would write .github/workflows/ci.yml` and `Would update justfile` (or `No changes to ...`). |
+| `intent sync --dry-run` | `--- dry-run ---`, then `Would write .github/workflows/ci.yml` and `Would update justfile` (or `No changes to ...`). If a file exists but is not tool-owned, shows `Cannot update ... not tool-owned`. |
 | `intent sync --write` | `Wrote .github/workflows/ci.yml` and `Wrote justfile` (or `No changes to ...`). |
 | `intent check` | `✓ Version ok (range): ...`, `✓ .github/workflows/ci.yml is up to date`, `✓ justfile is up to date`. |
 | `intent check --strict` | Same as `intent check`, but unsupported specs are errors. |

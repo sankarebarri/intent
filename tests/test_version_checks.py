@@ -17,6 +17,8 @@ def test_parse_version_bad() -> None:
     assert _parse_version("") is None
     assert _parse_version("3.x") is None
     assert _parse_version("hello") is None
+    assert _parse_version("3.") is None
+    assert _parse_version("3..12") is None
 
 
 def test_check_requires_python_range_supported_true() -> None:
@@ -31,10 +33,14 @@ def test_check_requires_python_range_supported_false() -> None:
 
 
 def test_check_requires_python_range_unsupported() -> None:
-    # We intentionally don't support these patterns yet
-    assert _check_requires_python_range("3.12", "~=3.11") is None
-    assert _check_requires_python_range("3.12", "==3.12") is None
-    assert _check_requires_python_range("3.12", "<=3.12") is None
+    assert _check_requires_python_range("3.12", "this-is-not-a-spec") is None
+    assert _check_requires_python_range("3.12", ">=bad") is None
+
+
+def test_check_requires_python_range_packaging_specifiers() -> None:
+    assert _check_requires_python_range("3.12", "~=3.11") is True
+    assert _check_requires_python_range("3.12", "==3.12") is True
+    assert _check_requires_python_range("3.12", "<=3.12") is True
 
 
 def test_render_ci_contains_header_and_structure() -> None:

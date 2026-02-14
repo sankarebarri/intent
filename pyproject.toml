@@ -32,6 +32,7 @@ classifiers = [
 ]
 
 dependencies = [
+    "packaging>=24.0",
     "typer>=0.9",
 ]
 

@@ -25,7 +25,10 @@ def read_pyproject_python(
     if not path.exists():
         return PyprojectPythonStatus.FILE_MISSING, None
 
-    data = tomllib.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError:
+        return PyprojectPythonStatus.INVALID, None
     project = data.get("project")
     if not isinstance(project, dict):
         return PyprojectPythonStatus.PROJECT_MISSING, None

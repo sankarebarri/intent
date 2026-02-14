@@ -1,6 +1,9 @@
 # intent/versioning.py
 from __future__ import annotations
 
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
+from packaging.version import InvalidVersion, Version
+
 
 def parse_version(version: str) -> tuple[int, ...] | None:
     """
@@ -20,7 +23,7 @@ def parse_version(version: str) -> tuple[int, ...] | None:
     for part in version.split("."):
         part = part.strip()
         if not part:
-            break
+            return None
         if not part.isdigit():
             return None
         parts.append(int(part))
@@ -36,20 +39,38 @@ def validate_python_version(raw: str) -> None:
         raise ValueError(f"Invalid python version {raw!r} (expected like '3.12')")
 
 
-def max_lower_bound(constraints: list[str]) -> tuple[int, ...] | None:
+def parse_pep440_version(raw: str) -> Version | None:
+    raw = raw.strip()
+    if not raw:
+        return None
+    try:
+        return Version(raw)
+    except InvalidVersion:
+        return None
+
+
+def max_lower_bound(spec: str) -> Version | None:
     """
-    Return the *largest* >= bound found in constraints, e.g.
-    [">=3.10", ">=3.12", "<3.13"] -> (3, 12)
+    Return the largest lower bound found in a spec string.
+    Examples:
+      ">=3.10,>=3.12,<3.13" -> Version("3.12")
+      ">3.11,<3.13" -> Version("3.11")
     """
-    best: tuple[int, ...] | None = None
-    for c in constraints:
-        c = c.strip()
-        if c.startswith(">="):
-            bound = parse_version(c[2:].strip())
-            if bound is None:
-                continue
-            if best is None or bound > best:
-                best = bound
+    try:
+        spec_set = SpecifierSet(spec)
+    except InvalidSpecifier:
+        return None
+
+    best: Version | None = None
+    for entry in spec_set:
+        if entry.operator not in (">=", ">"):
+            continue
+        try:
+            bound = Version(entry.version)
+        except InvalidVersion:
+            continue
+        if best is None or bound > best:
+            best = bound
     return best
 
 
@@ -65,33 +86,15 @@ def check_requires_python_range(intent_version: str, spec: str) -> bool | None:
       False -> intent_version does NOT satisfy the spec
       None  -> unsupported/unknown spec pattern
     """
-    intent_parsed = parse_version(intent_version)
+    intent_parsed = parse_pep440_version(intent_version)
     if intent_parsed is None:
         return None
 
-    constraints = [c.strip() for c in spec.split(",") if c.strip()]
-    if not constraints:
+    if not spec.strip():
         return None
 
-    supported = True
-    ok = True
-
-    for c in constraints:
-        if c.startswith(">="):
-            bound_parsed = parse_version(c[2:].strip())
-            if bound_parsed is None:
-                supported = False
-                continue
-            if intent_parsed < bound_parsed:
-                ok = False
-        elif c.startswith("<"):
-            bound_parsed = parse_version(c[1:].strip())
-            if bound_parsed is None:
-                supported = False
-                continue
-            if not (intent_parsed < bound_parsed):
-                ok = False
-        else:
-            supported = False
-
-    return ok if supported else None
+    try:
+        spec_set = SpecifierSet(spec)
+    except InvalidSpecifier:
+        return None
+    return intent_parsed in spec_set

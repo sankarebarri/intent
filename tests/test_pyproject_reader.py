@@ -58,3 +58,17 @@ def test_read_pyproject_python_requires_python_not_string(tmp_path: Path) -> Non
     status, value = read_pyproject_python(path)
     assert status is PyprojectPythonStatus.INVALID
     assert value is None
+
+
+def test_read_pyproject_python_invalid_toml(tmp_path: Path) -> None:
+    path = write_project(
+        tmp_path,
+        """
+        [project
+        requires-python = ">=3.12"
+        """,
+    )
+
+    status, value = read_pyproject_python(path)
+    assert status is PyprojectPythonStatus.INVALID
+    assert value is None
