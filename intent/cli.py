@@ -1,7 +1,9 @@
 # intent/cli.py
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Literal
 
 import typer
 
@@ -190,7 +192,11 @@ def sync(
 
 
 @app.command()
-def check(intent_path: str = "intent.toml", strict: bool = False) -> None:
+def check(
+    intent_path: str = "intent.toml",
+    strict: bool = False,
+    output_format: Literal["text", "json"] = typer.Option("text", "--format"),
+) -> None:
     """
     Check drift without writing.
 
@@ -204,15 +210,73 @@ def check(intent_path: str = "intent.toml", strict: bool = False) -> None:
     try:
         cfg = load_intent(path)
     except FileNotFoundError as e:
+        if output_format == "json":
+            typer.echo(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": {"kind": "config", "message": f"{e}"},
+                    }
+                )
+            )
+            raise typer.Exit(code=2)
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=2)
     except IntentConfigError as e:
+        if output_format == "json":
+            typer.echo(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": {"kind": "config", "message": f"{e}"},
+                    }
+                )
+            )
+            raise typer.Exit(code=2)
         typer.echo(f"Config error: {e}", err=True)
         raise typer.Exit(code=2)
 
     drift = False
 
     ok_versions, msg_versions = _check_versions(cfg.python_version, strict=strict)
+    ci_path = Path(".github/workflows/ci.yml")
+    just_path = Path("justfile")
+
+    ci_ok, ci_msg = _generated_drift_status(ci_path, render_ci(cfg))
+    just_ok, just_msg = _generated_drift_status(just_path, render_just(cfg))
+
+    if output_format == "json":
+        if not ok_versions:
+            drift = True
+        if not ci_ok:
+            drift = True
+        if not just_ok:
+            drift = True
+
+        payload = {
+            "ok": not drift,
+            "strict": strict,
+            "intent_path": str(path),
+            "versions": {
+                "ok": ok_versions,
+                "message": msg_versions,
+            },
+            "files": [
+                {
+                    "path": str(ci_path),
+                    "ok": ci_ok,
+                    "message": ci_msg,
+                },
+                {
+                    "path": str(just_path),
+                    "ok": just_ok,
+                    "message": just_msg,
+                },
+            ],
+        }
+        typer.echo(json.dumps(payload))
+        raise typer.Exit(code=1 if drift else 0)
+
     if not ok_versions:
         drift = True
         typer.echo(f"✗ {msg_versions}", err=True)
@@ -221,12 +285,6 @@ def check(intent_path: str = "intent.toml", strict: bool = False) -> None:
             typer.echo(msg_versions)
         else:
             typer.echo(f"✓ {msg_versions}")
-
-    ci_path = Path(".github/workflows/ci.yml")
-    just_path = Path("justfile")
-
-    ci_ok, ci_msg = _generated_drift_status(ci_path, render_ci(cfg))
-    just_ok, just_msg = _generated_drift_status(just_path, render_just(cfg))
 
     if ci_ok:
         typer.echo(f"✓ {ci_msg}")

@@ -1,6 +1,7 @@
 # test_cli_dry_run_and_check.py
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -168,3 +169,62 @@ def test_check_handles_invalid_pyproject_toml_strict(tmp_path: Path, monkeypatch
     result = runner.invoke(app, ["check", "--strict"])
     assert result.exit_code == 1
     assert "invalid requires-python value in pyproject.toml" in result.output
+
+
+def test_check_json_output_success(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    intent_path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+        """,
+    )
+
+    cfg = load_intent(intent_path)
+    (tmp_path / ".github/workflows").mkdir(parents=True)
+    (tmp_path / ".github/workflows/ci.yml").write_text(render_ci(cfg), encoding="utf-8")
+    (tmp_path / "justfile").write_text(render_just(cfg), encoding="utf-8")
+
+    result = runner.invoke(app, ["check", "--format", "json"])
+    assert result.exit_code == 0
+
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["versions"]["ok"] is True
+    assert len(data["files"]) == 2
+    assert all(entry["ok"] for entry in data["files"])
+
+
+def test_check_json_output_drift(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+        """,
+    )
+
+    result = runner.invoke(app, ["check", "--format", "json"])
+    assert result.exit_code == 1
+
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert any(entry["ok"] is False for entry in data["files"])
+
+
+def test_check_json_output_config_error(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["check", "--format", "json"])
+    assert result.exit_code == 2
+
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"]["kind"] == "config"

@@ -118,6 +118,7 @@ All commands and what they do:
 | `intent sync --write` | Write tool-owned files. |
 | `intent check` | Check drift without writing. |
 | `intent check --strict` | Check drift with strict `requires_python` parsing. |
+| `intent check --format json` | Check drift and emit machine-readable JSON. |
 | `intent sync path/to/intent.toml` | Use a non-default config path for sync. |
 | `intent check path/to/intent.toml` | Use a non-default config path for check. |
 
@@ -135,6 +136,7 @@ Expected output:
 | `intent sync --write` | `Wrote .github/workflows/ci.yml` and `Wrote justfile` (or `No changes to ...`). |
 | `intent check` | `✓ Version ok (range): ...`, `✓ .github/workflows/ci.yml is up to date`, `✓ justfile is up to date`. |
 | `intent check --strict` | Same as `intent check`, but unsupported specs are errors. |
+| `intent check --format json` | JSON object with `ok`, `versions`, and per-file drift status. Exit codes stay the same (`0/1/2`). |
 | `intent sync path/to/intent.toml` | Same outputs as `intent sync`, using that file. |
 | `intent check path/to/intent.toml` | Same outputs as `intent check`, using that file. |
 
