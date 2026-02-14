@@ -8,6 +8,8 @@ from pathlib import Path
 from .versioning import validate_python_version
 
 DEFAULT_CI_INSTALL = "-e .[dev]"
+DEFAULT_SCHEMA_VERSION = 1
+DEFAULT_POLICY_STRICT = False
 
 
 class IntentConfigError(Exception):
@@ -19,6 +21,8 @@ class IntentConfig:
     python_version: str
     commands: dict[str, str]
     ci_install: str = DEFAULT_CI_INSTALL
+    policy_strict: bool = DEFAULT_POLICY_STRICT
+    schema_version: int = DEFAULT_SCHEMA_VERSION
 
 
 def load_raw_intent(path: Path) -> dict:
@@ -52,6 +56,29 @@ def load_raw_intent(path: Path) -> dict:
         if not value.strip():
             raise IntentConfigError(f"[commands].{name} cannot be empty")
 
+    intent_section = data.get("intent")
+    if intent_section is not None:
+        if not isinstance(intent_section, dict):
+            raise IntentConfigError("Invalid [intent] table: must be a table/object")
+        raw_schema = intent_section.get("schema_version")
+        if raw_schema is None:
+            raise IntentConfigError("[intent].schema_version is required when [intent] is present")
+        if not isinstance(raw_schema, int):
+            raise IntentConfigError("[intent].schema_version must be an integer")
+        if raw_schema != DEFAULT_SCHEMA_VERSION:
+            raise IntentConfigError(
+                f"Unsupported [intent].schema_version={raw_schema} "
+                f"(expected {DEFAULT_SCHEMA_VERSION})"
+            )
+
+    policy_section = data.get("policy")
+    if policy_section is not None:
+        if not isinstance(policy_section, dict):
+            raise IntentConfigError("Invalid [policy] table: must be a table/object")
+        raw_strict = policy_section.get("strict")
+        if raw_strict is not None and not isinstance(raw_strict, bool):
+            raise IntentConfigError("[policy].strict must be a boolean")
+
     return data
 
 
@@ -82,5 +109,22 @@ def load_intent(path: Path) -> IntentConfig:
             if not isinstance(raw_install, str) or not raw_install.strip():
                 raise IntentConfigError("[ci].install must be a non-empty string")
             ci_install = raw_install.strip()
+    schema_version = DEFAULT_SCHEMA_VERSION
+    intent_section = data.get("intent")
+    if isinstance(intent_section, dict):
+        schema_version = intent_section["schema_version"]
 
-    return IntentConfig(python_version=python_version, commands=commands, ci_install=ci_install)
+    policy_strict = DEFAULT_POLICY_STRICT
+    policy_section = data.get("policy")
+    if isinstance(policy_section, dict):
+        raw_strict = policy_section.get("strict")
+        if raw_strict is not None:
+            policy_strict = raw_strict
+
+    return IntentConfig(
+        schema_version=schema_version,
+        python_version=python_version,
+        commands=commands,
+        ci_install=ci_install,
+        policy_strict=policy_strict,
+    )

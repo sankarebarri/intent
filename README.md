@@ -31,6 +31,9 @@ python -m pip install -e .
 ### Intent file(intent.toml)
 The only file you author
 ```toml
+[intent]
+schema_version = 1
+
 # use to verify that versions conform all around
 [python]
 version = "3.12"
@@ -44,6 +47,11 @@ lint = "ruff check ."
 install = "-e .[dev]"
 # This value is used verbatim when generating CI install steps.
 # Intent does not infer dependencies, it only reflects what you declare.
+
+[policy]
+strict = false
+# If true, `intent check` behaves like `intent check --strict` by default.
+# You can still override per-run with `--strict` / `--no-strict`.
 ```
 
 This file describes **agreements**, not implementations.
@@ -121,6 +129,7 @@ All commands and what they do:
 | `intent sync --write` | Write tool-owned files. |
 | `intent check` | Check drift without writing. |
 | `intent check --strict` | Check drift with strict `requires_python` parsing. |
+| `intent check --no-strict` | Override config policy and run non-strict checks. |
 | `intent check --format json` | Check drift and emit machine-readable JSON. |
 | `intent sync path/to/intent.toml` | Use a non-default config path for sync. |
 | `intent check path/to/intent.toml` | Use a non-default config path for check. |
@@ -142,6 +151,7 @@ Expected output:
 | `intent sync --write` | `Wrote .github/workflows/ci.yml` and `Wrote justfile` (or `No changes to ...`). |
 | `intent check` | `✓ Version ok (range): ...`, `✓ .github/workflows/ci.yml is up to date`, `✓ justfile is up to date`. |
 | `intent check --strict` | Same as `intent check`, but unsupported specs are errors. |
+| `intent check --no-strict` | Forces non-strict behavior even when `[policy].strict = true`. |
 | `intent check --format json` | JSON object with `ok`, `versions`, and per-file drift status. Exit codes stay the same (`0/1/2`). |
 | `intent sync path/to/intent.toml` | Same outputs as `intent sync`, using that file. |
 | `intent check path/to/intent.toml` | Same outputs as `intent check`, using that file. |
@@ -161,6 +171,15 @@ Intent emits stable error codes in text output (for failures) and JSON output (`
 | `INTENT201` | Required generated file is missing. |
 | `INTENT202` | Generated file exists but is not tool-owned. |
 | `INTENT203` | Generated file is out of date. |
+
+### Config Schema
+
+Intent supports config schema:
+
+| Field | Meaning |
+| --- | --- |
+| `[intent].schema_version = 1` | Current supported schema version. |
+| `[policy].strict = true/false` | Default strictness for `intent check` when no strict flag is passed. |
 
 ## Bootstrapping (`intent init`)
 

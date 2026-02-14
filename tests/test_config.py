@@ -45,6 +45,8 @@ def test_load_intent_valid(
         "test": "pytest -q",
         "lint": "ruff check .",
     }
+    assert cfg.schema_version == 1
+    assert cfg.policy_strict is False
 
 
 def test_load_intent_missing_python(
@@ -100,6 +102,72 @@ def test_load_intent_ci_install_custom(
     )
     cfg = load_intent(path)
     assert cfg.ci_install == ".[dev]"
+
+
+def test_load_intent_schema_and_policy_values(
+    tmp_path: Path,
+) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [intent]
+        schema_version = 1
+
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [policy]
+        strict = true
+        """,
+    )
+    cfg = load_intent(path)
+    assert cfg.schema_version == 1
+    assert cfg.policy_strict is True
+
+
+def test_load_intent_rejects_invalid_schema_version(
+    tmp_path: Path,
+) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [intent]
+        schema_version = 2
+
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+        """,
+    )
+    with pytest.raises(IntentConfigError) as excinfo:
+        load_intent(path)
+    assert "Unsupported [intent].schema_version" in str(excinfo.value)
+
+
+def test_load_intent_rejects_non_boolean_policy_strict(
+    tmp_path: Path,
+) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [policy]
+        strict = "yes"
+        """,
+    )
+    with pytest.raises(IntentConfigError) as excinfo:
+        load_intent(path)
+    assert "[policy].strict must be a boolean" in str(excinfo.value)
 
 
 def test_load_intent_invalid_toml(

@@ -20,9 +20,13 @@ def test_init_creates_default_intent_file(tmp_path: Path, monkeypatch) -> None:
     assert result.exit_code == 0
 
     content = (tmp_path / "intent.toml").read_text(encoding="utf-8")
+    assert "[intent]" in content
+    assert "schema_version = 1" in content
     assert '[python]' in content
     assert 'version = "3.12"' in content
     assert '[commands]' in content
+    assert "[policy]" in content
+    assert "strict = false" in content
 
 
 def test_init_from_existing_infers_python_from_pyproject_lower_bound(

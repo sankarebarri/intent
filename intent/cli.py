@@ -135,6 +135,9 @@ def _check_versions(cfg_python: str, strict: bool) -> tuple[bool, str, str | Non
 
 def _render_intent_template(python_version: str) -> str:
     lines = [
+        "[intent]",
+        "schema_version = 1",
+        "",
         "[python]",
         f'version = "{python_version}"',
         "",
@@ -144,6 +147,9 @@ def _render_intent_template(python_version: str) -> str:
         "",
         "[ci]",
         'install = "-e .[dev]"',
+        "",
+        "[policy]",
+        "strict = false",
         "",
     ]
     return "\n".join(lines)
@@ -281,7 +287,7 @@ def sync(
 @app.command()
 def check(
     intent_path: str = "intent.toml",
-    strict: bool = False,
+    strict: bool | None = typer.Option(None, "--strict/--no-strict"),
     output_format: Literal["text", "json"] = typer.Option("text", "--format"),
 ) -> None:
     """
@@ -326,8 +332,12 @@ def check(
         raise typer.Exit(code=2)
 
     drift = False
+    effective_strict = cfg.policy_strict if strict is None else strict
 
-    ok_versions, msg_versions, versions_code = _check_versions(cfg.python_version, strict=strict)
+    ok_versions, msg_versions, versions_code = _check_versions(
+        cfg.python_version,
+        strict=effective_strict,
+    )
     ci_path = Path(".github/workflows/ci.yml")
     just_path = Path("justfile")
 
@@ -344,7 +354,7 @@ def check(
 
         payload = {
             "ok": not drift,
-            "strict": strict,
+            "strict": effective_strict,
             "intent_path": str(path),
             "versions": {
                 "ok": ok_versions,
