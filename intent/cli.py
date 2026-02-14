@@ -217,6 +217,78 @@ def init(
 
 
 @app.command()
+def show(
+    intent_path: str = "intent.toml",
+    output_format: Literal["text", "json"] = typer.Option("text", "--format"),
+) -> None:
+    """
+    Show resolved Intent config and related inspection info.
+    """
+    path = Path(intent_path)
+    try:
+        cfg = load_intent(path)
+    except FileNotFoundError as e:
+        if output_format == "json":
+            typer.echo(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": {"kind": "config", "message": f"{e}"},
+                        "code": ERR_CONFIG_NOT_FOUND,
+                    }
+                )
+            )
+            raise typer.Exit(code=2)
+        typer.echo(f"[{ERR_CONFIG_NOT_FOUND}] Error: {e}", err=True)
+        raise typer.Exit(code=2)
+    except IntentConfigError as e:
+        if output_format == "json":
+            typer.echo(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": {"kind": "config", "message": f"{e}"},
+                        "code": ERR_CONFIG_INVALID,
+                    }
+                )
+            )
+            raise typer.Exit(code=2)
+        typer.echo(f"[{ERR_CONFIG_INVALID}] Config error: {e}", err=True)
+        raise typer.Exit(code=2)
+
+    pyproject_status, pyproject_requires_python = read_pyproject_python()
+    resolved = {
+        "ok": True,
+        "intent_path": str(path),
+        "schema_version": cfg.schema_version,
+        "python_version": cfg.python_version,
+        "policy_strict": cfg.policy_strict,
+        "ci_install": cfg.ci_install,
+        "commands": cfg.commands,
+        "pyproject": {
+            "status": pyproject_status.value,
+            "requires_python": pyproject_requires_python,
+        },
+    }
+
+    if output_format == "json":
+        typer.echo(json.dumps(resolved))
+        raise typer.Exit(code=0)
+
+    typer.echo(f"Intent path: {path}")
+    typer.echo(f"Schema version: {cfg.schema_version}")
+    typer.echo(f"Python version: {cfg.python_version}")
+    typer.echo(f"Policy strict: {cfg.policy_strict}")
+    typer.echo(f"CI install: {cfg.ci_install}")
+    typer.echo("Commands:")
+    for name, cmd in cfg.commands.items():
+        typer.echo(f"  {name} -> {cmd}")
+    typer.echo(f"Pyproject status: {pyproject_status.value}")
+    if pyproject_requires_python is not None:
+        typer.echo(f"Pyproject requires-python: {pyproject_requires_python}")
+
+
+@app.command()
 def sync(
     intent_path: str = "intent.toml",
     show_ci: bool = False,

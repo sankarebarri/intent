@@ -122,6 +122,8 @@ All commands and what they do:
 | `intent init` | Create a starter `intent.toml`. |
 | `intent init --from-existing` | Create `intent.toml` and infer python version from `pyproject.toml` when possible. |
 | `intent init --force` | Overwrite existing `intent.toml`. |
+| `intent show` | Show resolved config and environment inspection summary. |
+| `intent show --format json` | Show resolved config as JSON for automation/scripts. |
 | `intent sync` | Read `intent.toml` + `pyproject.toml` and show config + version check. |
 | `intent sync --show-ci` | `intent sync` plus preview generated CI. |
 | `intent sync --show-just` | `intent sync` plus preview generated justfile. |
@@ -144,6 +146,8 @@ Expected output:
 | `intent init` | Writes `intent.toml` starter template (`python=3.12`, basic commands, CI install). |
 | `intent init --from-existing` | Writes template and attempts to infer python version from `pyproject.toml` (`requires-python`). |
 | `intent init --force` | Overwrites existing `intent.toml`. |
+| `intent show` | Prints schema version, policy strictness, commands, and pyproject status. |
+| `intent show --format json` | Outputs machine-readable config summary and pyproject status. |
 | `intent sync` | Lines like `Intent python version: 3.12`, `Intent commands:`, `test -> pytest -q`, `Version ok (range): intent 3.12 satisfies >=3.10,<3.13`. |
 | `intent sync --show-ci` | Same as `intent sync`, then `--- ci.yml (preview) ---` and rendered `ci.yml`. |
 | `intent sync --show-just` | Same as `intent sync`, then `--- justfile (preview) ---` and rendered `justfile`. |
