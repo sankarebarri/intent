@@ -168,6 +168,7 @@ def test_check_handles_invalid_pyproject_toml_strict(tmp_path: Path, monkeypatch
 
     result = runner.invoke(app, ["check", "--strict"])
     assert result.exit_code == 1
+    assert "[INTENT101]" in result.output
     assert "invalid requires-python value in pyproject.toml" in result.output
 
 
@@ -227,4 +228,46 @@ def test_check_json_output_config_error(tmp_path: Path, monkeypatch) -> None:
 
     data = json.loads(result.output)
     assert data["ok"] is False
+    assert data["code"] == "INTENT002"
     assert data["error"]["kind"] == "config"
+
+
+def test_check_json_output_includes_stable_codes(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+        """,
+    )
+
+    result = runner.invoke(app, ["check", "--strict", "--format", "json"])
+    assert result.exit_code == 1
+
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["versions"]["code"] is None
+    assert data["files"][0]["code"] == "INTENT201"
+    assert data["files"][1]["code"] == "INTENT201"
+
+
+def test_sync_rejects_conflicting_write_and_dry_run_with_code(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+        """,
+    )
+
+    result = runner.invoke(app, ["sync", "--write", "--dry-run"])
+    assert result.exit_code == 2
+    assert "[INTENT001]" in result.output

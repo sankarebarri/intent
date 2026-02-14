@@ -140,6 +140,60 @@ Expected output:
 | `intent sync path/to/intent.toml` | Same outputs as `intent sync`, using that file. |
 | `intent check path/to/intent.toml` | Same outputs as `intent check`, using that file. |
 
+### Stable Error Codes
+
+Intent emits stable error codes in text output (for failures) and JSON output (`--format json`):
+
+| Code | Meaning |
+| --- | --- |
+| `INTENT001` | Invalid CLI option combination (`sync --write --dry-run`). |
+| `INTENT002` | Missing intent config file. |
+| `INTENT003` | Invalid intent config content. |
+| `INTENT004` | Ownership violation while writing generated files. |
+| `INTENT101` | Python version compatibility/spec check failure. |
+| `INTENT201` | Required generated file is missing. |
+| `INTENT202` | Generated file exists but is not tool-owned. |
+| `INTENT203` | Generated file is out of date. |
+
+## Pre-commit Integration
+
+Use `pre-commit` to block commits when Intent drift exists.
+
+Install:
+
+```bash
+python -m pip install pre-commit
+```
+
+Add this to `.pre-commit-config.yaml`:
+
+```yaml
+repos:
+  - repo: local
+    hooks:
+      - id: intent-check
+        name: intent check
+        entry: intent check --strict
+        language: system
+        pass_filenames: false
+```
+
+Enable hooks:
+
+```bash
+pre-commit install
+```
+
+Run once across all files:
+
+```bash
+pre-commit run --all-files
+```
+
+Expected behavior:
+- commit is blocked when `intent check --strict` exits non-zero
+- output includes stable error codes (for example `INTENT101`, `INTENT201`)
+
 ## Safety & Ownership Rules
 Intent is intentionally conservative.
 
