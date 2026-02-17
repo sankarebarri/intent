@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -16,6 +17,7 @@ from .render_just import render_just
 from .versioning import (
     check_requires_python_range,
     max_lower_bound,
+    parse_version,
     parse_pep440_version,
 )
 
@@ -184,6 +186,139 @@ def _infer_init_python_version(from_existing: bool) -> tuple[str, str]:
             return f"{parsed.major}.{parsed.minor}", "pyproject"
 
     return default_version, "default"
+
+
+def _read_python_version_file(path: Path = Path(".python-version")) -> str | None:
+    if not path.exists():
+        return None
+    raw = path.read_text(encoding="utf-8").strip()
+    if not raw:
+        return None
+    return raw.splitlines()[0].strip() or None
+
+
+def _read_tool_versions_python(path: Path = Path(".tool-versions")) -> str | None:
+    if not path.exists():
+        return None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = stripped.split()
+        if len(parts) >= 2 and parts[0] == "python":
+            return parts[1].strip() or None
+    return None
+
+
+def _same_major_minor(lhs: str, rhs: str) -> bool:
+    left = parse_version(lhs)
+    right = parse_version(rhs)
+    if left is None or right is None or len(left) < 2 or len(right) < 2:
+        return False
+    return left[:2] == right[:2]
+
+
+def _next_minor(version: str) -> str | None:
+    parsed = parse_version(version)
+    if parsed is None or len(parsed) < 2:
+        return None
+    major, minor = parsed[0], parsed[1]
+    return f"{major}.{minor + 1}"
+
+
+def _upsert_pyproject_requires_python(path: Path, new_spec: str) -> tuple[bool, str]:
+    if not path.exists():
+        content = (
+            "[project]\n"
+            'name = "REPLACE_ME"\n'
+            'version = "0.0.0"\n'
+            f'requires-python = "{new_spec}"\n'
+        )
+        path.write_text(content, encoding="utf-8")
+        return True, "created"
+
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    section_re = re.compile(r"^\s*\[([^\[\]]+)\]\s*$")
+
+    project_start: int | None = None
+    project_end = len(lines)
+    for idx, line in enumerate(lines):
+        match = section_re.match(line)
+        if not match:
+            continue
+        section = match.group(1).strip()
+        if section == "project":
+            project_start = idx
+            continue
+        if project_start is not None:
+            project_end = idx
+            break
+
+    changed = False
+    new_line = f'requires-python = "{new_spec}"'
+
+    if project_start is None:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.extend(["[project]", new_line])
+        changed = True
+    else:
+        requires_idx: int | None = None
+        for idx in range(project_start + 1, project_end):
+            stripped = lines[idx].strip()
+            if stripped.startswith("requires-python") and "=" in stripped:
+                requires_idx = idx
+                break
+        if requires_idx is None:
+            lines.insert(project_start + 1, new_line)
+            changed = True
+        elif lines[requires_idx].strip() != new_line:
+            lines[requires_idx] = new_line
+            changed = True
+
+    if changed:
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return True, "updated" if path.exists() else "created"
+    return False, "unchanged"
+
+
+def _write_python_version(path: Path, version: str) -> tuple[bool, str]:
+    new_text = f"{version}\n"
+    if not path.exists():
+        path.write_text(new_text, encoding="utf-8")
+        return True, "created"
+    existing = path.read_text(encoding="utf-8")
+    if existing == new_text:
+        return False, "unchanged"
+    path.write_text(new_text, encoding="utf-8")
+    return True, "updated"
+
+
+def _upsert_tool_versions_python(path: Path, version: str) -> tuple[bool, str]:
+    new_line = f"python {version}"
+    if not path.exists():
+        path.write_text(new_line + "\n", encoding="utf-8")
+        return True, "created"
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = stripped.split()
+        if len(parts) >= 2 and parts[0] == "python":
+            if stripped == new_line:
+                return False, "unchanged"
+            lines[idx] = new_line
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            return True, "updated"
+
+    if lines and lines[-1].strip():
+        lines.append("")
+    lines.append(new_line)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return True, "updated"
 
 
 @app.command()
@@ -476,6 +611,163 @@ def check(
         typer.echo("\nHint: run `intent sync --write` to update generated files.", err=True)
         raise typer.Exit(code=1)
 
+    raise typer.Exit(code=0)
+
+
+@app.command()
+def reconcile(
+    intent_path: str = "intent.toml",
+    plan: bool = typer.Option(False, "--plan", help="Show planned Python-version reconciliation"),
+    apply: bool = typer.Option(False, "--apply", help="Apply Python-version reconciliation"),
+    allow_existing: bool = typer.Option(
+        False,
+        "--allow-existing",
+        help="Allow editing existing pyproject/.python-version/.tool-versions files",
+    ),
+) -> None:
+    """
+    Plan Python-version reconciliation across supported project files.
+    """
+    if plan == apply:
+        typer.echo(
+            f"[{ERR_USAGE_CONFLICT}] Error: choose exactly one of --plan or --apply",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    path = Path(intent_path)
+    try:
+        cfg = load_intent(path)
+    except FileNotFoundError as e:
+        typer.echo(f"[{ERR_CONFIG_NOT_FOUND}] Error: {e}", err=True)
+        raise typer.Exit(code=2)
+    except IntentConfigError as e:
+        typer.echo(f"[{ERR_CONFIG_INVALID}] Config error: {e}", err=True)
+        raise typer.Exit(code=2)
+
+    target = cfg.python_version
+    next_minor = _next_minor(target)
+    recommended_pyproject = f">={target},<{next_minor}" if next_minor else f">={target}"
+    pyproject_path = Path("pyproject.toml")
+    pyproject_status, pyproject_spec = read_pyproject_python(pyproject_path)
+    python_version_current = _read_python_version_file()
+    tool_versions_current = _read_tool_versions_python()
+
+    mode = "apply" if apply else "plan"
+    typer.echo(f"--- reconcile {mode} ---")
+    typer.echo(f"Target python version (from intent): {target}")
+    typer.echo("")
+
+    unresolved = False
+
+    if pyproject_status == PyprojectPythonStatus.FILE_MISSING:
+        if apply:
+            _, action = _upsert_pyproject_requires_python(pyproject_path, recommended_pyproject)
+            typer.echo(f"- {pyproject_path}: {action} ([project].requires-python={recommended_pyproject})")
+        else:
+            typer.echo(f"- {pyproject_path}: missing")
+            typer.echo(f"  action: create/update [project].requires-python = {recommended_pyproject}")
+    elif pyproject_status == PyprojectPythonStatus.PROJECT_MISSING:
+        if apply and allow_existing:
+            _, action = _upsert_pyproject_requires_python(pyproject_path, recommended_pyproject)
+            typer.echo(f"- {pyproject_path}: {action} ([project].requires-python={recommended_pyproject})")
+        elif apply:
+            unresolved = True
+            typer.echo(f"- {pyproject_path}: skipped ([project] missing, use --allow-existing)")
+        else:
+            typer.echo(f"- {pyproject_path}: [project] missing")
+            typer.echo(f"  action: add [project].requires-python = {recommended_pyproject}")
+    elif pyproject_status == PyprojectPythonStatus.REQUIRES_PYTHON_MISSING:
+        if apply and allow_existing:
+            _, action = _upsert_pyproject_requires_python(pyproject_path, recommended_pyproject)
+            typer.echo(f"- {pyproject_path}: {action} ([project].requires-python={recommended_pyproject})")
+        elif apply:
+            unresolved = True
+            typer.echo(f"- {pyproject_path}: skipped (requires-python missing, use --allow-existing)")
+        else:
+            typer.echo(f"- {pyproject_path}: requires-python missing")
+            typer.echo(f"  action: add requires-python = {recommended_pyproject}")
+    elif pyproject_status == PyprojectPythonStatus.INVALID:
+        typer.echo(f"- {pyproject_path}: invalid/unreadable")
+        if apply:
+            unresolved = True
+            typer.echo("  action: manual fix required before reconcile --apply")
+        else:
+            typer.echo("  action: manual fix required before auto-reconcile")
+    else:
+        assert pyproject_spec is not None
+        in_range = check_requires_python_range(target, pyproject_spec)
+        lower = max_lower_bound(pyproject_spec)
+        exact_lower_match = lower is not None and _same_major_minor(str(lower), target)
+        if in_range is True and exact_lower_match:
+            typer.echo(f"- {pyproject_path}: aligned (requires-python={pyproject_spec})")
+        else:
+            if apply and allow_existing:
+                _, action = _upsert_pyproject_requires_python(pyproject_path, recommended_pyproject)
+                typer.echo(f"- {pyproject_path}: {action} (requires-python={recommended_pyproject})")
+            elif apply:
+                unresolved = True
+                typer.echo(f"- {pyproject_path}: skipped (drift={pyproject_spec}, use --allow-existing)")
+            else:
+                typer.echo(f"- {pyproject_path}: drift (requires-python={pyproject_spec})")
+                typer.echo(f"  action: set requires-python = {recommended_pyproject}")
+
+    python_version_path = Path(".python-version")
+    if python_version_current is None:
+        if apply:
+            _, action = _write_python_version(python_version_path, target)
+            typer.echo(f"- {python_version_path}: {action} ({target})")
+        else:
+            typer.echo(f"- {python_version_path}: missing")
+            typer.echo(f"  action: write {target}")
+    elif _same_major_minor(python_version_current, target):
+        typer.echo(f"- {python_version_path}: aligned ({python_version_current})")
+    else:
+        if apply and allow_existing:
+            _, action = _write_python_version(python_version_path, target)
+            typer.echo(f"- {python_version_path}: {action} ({target})")
+        elif apply:
+            unresolved = True
+            typer.echo(f"- {python_version_path}: skipped (drift={python_version_current}, use --allow-existing)")
+        else:
+            typer.echo(f"- {python_version_path}: drift ({python_version_current})")
+            typer.echo(f"  action: replace with {target}")
+
+    tool_versions_path = Path(".tool-versions")
+    if tool_versions_current is None:
+        if not tool_versions_path.exists() and apply:
+            _, action = _upsert_tool_versions_python(tool_versions_path, target)
+            typer.echo(f"- {tool_versions_path}: {action} (python {target})")
+        elif apply and allow_existing:
+            _, action = _upsert_tool_versions_python(tool_versions_path, target)
+            typer.echo(f"- {tool_versions_path}: {action} (python {target})")
+        elif apply:
+            unresolved = True
+            typer.echo(f"- {tool_versions_path}: skipped (no python entry, use --allow-existing)")
+        else:
+            typer.echo(f"- {tool_versions_path}: missing or no python entry")
+            typer.echo(f"  action: add `python {target}`")
+    elif _same_major_minor(tool_versions_current, target):
+        typer.echo(f"- {tool_versions_path}: aligned (python {tool_versions_current})")
+    else:
+        if apply and allow_existing:
+            _, action = _upsert_tool_versions_python(tool_versions_path, target)
+            typer.echo(f"- {tool_versions_path}: {action} (python {target})")
+        elif apply:
+            unresolved = True
+            typer.echo(f"- {tool_versions_path}: skipped (drift={tool_versions_current}, use --allow-existing)")
+        else:
+            typer.echo(f"- {tool_versions_path}: drift (python {tool_versions_current})")
+            typer.echo(f"  action: set `python {target}`")
+
+    typer.echo("")
+    if apply:
+        if unresolved:
+            typer.echo("Reconcile apply completed with skips. Re-run with `--allow-existing` where needed.")
+            raise typer.Exit(code=1)
+        typer.echo("Reconcile apply completed.")
+        raise typer.Exit(code=0)
+    typer.echo("No files were modified. Use `intent reconcile --apply` to apply changes.")
     raise typer.Exit(code=0)
 
 

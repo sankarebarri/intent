@@ -21,6 +21,7 @@ class IntentConfig:
     python_version: str
     commands: dict[str, str]
     ci_install: str = DEFAULT_CI_INSTALL
+    ci_python_versions: list[str] | None = None
     policy_strict: bool = DEFAULT_POLICY_STRICT
     schema_version: int = DEFAULT_SCHEMA_VERSION
 
@@ -100,6 +101,7 @@ def load_intent(path: Path) -> IntentConfig:
     commands = {k: v.strip() for k, v in dict(commands_section).items()}
 
     ci_install = DEFAULT_CI_INSTALL
+    ci_python_versions: list[str] | None = None
     ci_section = data.get("ci")
     if ci_section is not None:
         if not isinstance(ci_section, dict):
@@ -109,6 +111,23 @@ def load_intent(path: Path) -> IntentConfig:
             if not isinstance(raw_install, str) or not raw_install.strip():
                 raise IntentConfigError("[ci].install must be a non-empty string")
             ci_install = raw_install.strip()
+        raw_versions = ci_section.get("python_versions")
+        if raw_versions is not None:
+            if not isinstance(raw_versions, list) or not raw_versions:
+                raise IntentConfigError("[ci].python_versions must be a non-empty array of strings")
+            parsed_versions: list[str] = []
+            for idx, raw in enumerate(raw_versions):
+                if not isinstance(raw, str) or not raw.strip():
+                    raise IntentConfigError(
+                        f"[ci].python_versions[{idx}] must be a non-empty version string"
+                    )
+                version = raw.strip()
+                try:
+                    validate_python_version(version)
+                except ValueError as e:
+                    raise IntentConfigError(str(e)) from e
+                parsed_versions.append(version)
+            ci_python_versions = parsed_versions
     schema_version = DEFAULT_SCHEMA_VERSION
     intent_section = data.get("intent")
     if isinstance(intent_section, dict):
@@ -126,5 +145,6 @@ def load_intent(path: Path) -> IntentConfig:
         python_version=python_version,
         commands=commands,
         ci_install=ci_install,
+        ci_python_versions=ci_python_versions,
         policy_strict=policy_strict,
     )

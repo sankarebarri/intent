@@ -45,8 +45,10 @@ lint = "ruff check ."
 # used to generate and install dependencies in ci.yml
 [ci]
 install = "-e .[dev]"
+python_versions = ["3.11", "3.12"]
 # This value is used verbatim when generating CI install steps.
 # Intent does not infer dependencies, it only reflects what you declare.
+# Optional: when set, CI runs a matrix across these Python versions.
 
 [policy]
 strict = false
@@ -74,7 +76,8 @@ Intent will:
 * validate consistency
 * fail loudly on mismatch
 
-Intent will **never modify them**.
+Intent will not modify them during `sync`/`check`.
+`intent reconcile --apply --allow-existing` can update version fields by explicit opt-in.
 
 ---
 
@@ -133,6 +136,9 @@ All commands and what they do:
 | `intent check --strict` | Check drift with strict `requires_python` parsing. |
 | `intent check --no-strict` | Override config policy and run non-strict checks. |
 | `intent check --format json` | Check drift and emit machine-readable JSON. |
+| `intent reconcile --plan` | Preview Python-version reconciliation across `pyproject.toml`, `.python-version`, and `.tool-versions`. |
+| `intent reconcile --apply` | Apply reconciliation for missing files; skips existing-file edits unless opted in. |
+| `intent reconcile --apply --allow-existing` | Apply reconciliation including edits to existing version files. |
 | `intent sync path/to/intent.toml` | Use a non-default config path for sync. |
 | `intent check path/to/intent.toml` | Use a non-default config path for check. |
 
@@ -157,6 +163,9 @@ Expected output:
 | `intent check --strict` | Same as `intent check`, but unsupported specs are errors. |
 | `intent check --no-strict` | Forces non-strict behavior even when `[policy].strict = true`. |
 | `intent check --format json` | JSON object with `ok`, `versions`, and per-file drift status. Exit codes stay the same (`0/1/2`). |
+| `intent reconcile --plan` | Prints a no-write plan showing `aligned`/`drift`/`missing` status and recommended actions for Python version files. |
+| `intent reconcile --apply` | Writes missing version files and reports skipped existing-file drifts (exit `1` when skips remain). |
+| `intent reconcile --apply --allow-existing` | Updates existing `pyproject.toml`, `.python-version`, and `.tool-versions` Python version entries. |
 | `intent sync path/to/intent.toml` | Same outputs as `intent sync`, using that file. |
 | `intent check path/to/intent.toml` | Same outputs as `intent check`, using that file. |
 
@@ -184,6 +193,7 @@ Intent supports config schema:
 | --- | --- |
 | `[intent].schema_version = 1` | Current supported schema version. |
 | `[policy].strict = true/false` | Default strictness for `intent check` when no strict flag is passed. |
+| `[ci].python_versions = ["3.11", "3.12"]` | Optional CI matrix versions. If omitted, CI uses `[python].version`. |
 
 ## Bootstrapping (`intent init`)
 

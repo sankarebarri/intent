@@ -104,6 +104,43 @@ def test_load_intent_ci_install_custom(
     assert cfg.ci_install == ".[dev]"
 
 
+def test_load_intent_ci_python_versions_custom(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [ci]
+        python_versions = ["3.11", "3.12"]
+        """,
+    )
+    cfg = load_intent(path)
+    assert cfg.ci_python_versions == ["3.11", "3.12"]
+
+
+def test_load_intent_ci_python_versions_rejects_invalid_type(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [ci]
+        python_versions = "3.12"
+        """,
+    )
+    with pytest.raises(IntentConfigError) as excinfo:
+        load_intent(path)
+    assert "[ci].python_versions must be a non-empty array of strings" in str(excinfo.value)
+
+
 def test_load_intent_schema_and_policy_values(
     tmp_path: Path,
 ) -> None:

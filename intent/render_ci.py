@@ -21,11 +21,20 @@ def render_ci(cfg: IntentConfig) -> str:
     lines.append("jobs:")
     lines.append("  ci:")
     lines.append("    runs-on: ubuntu-latest")
+    if cfg.ci_python_versions:
+        lines.append("    strategy:")
+        lines.append("      fail-fast: false")
+        lines.append("      matrix:")
+        versions = ", ".join(f'"{v}"' for v in cfg.ci_python_versions)
+        lines.append(f"        python-version: [{versions}]")
     lines.append("    steps:")
     lines.append("      - uses: actions/checkout@v4")
     lines.append("      - uses: actions/setup-python@v5")
     lines.append("        with:")
-    lines.append(f'          python-version: "{cfg.python_version}"')
+    if cfg.ci_python_versions:
+        lines.append("          python-version: ${{ matrix.python-version }}")
+    else:
+        lines.append(f'          python-version: "{cfg.python_version}"')
     lines.append("")
     lines.append("      - name: Install dependencies")
     lines.append("        run: |")
@@ -35,7 +44,9 @@ def render_ci(cfg: IntentConfig) -> str:
 
     for name, cmd in cfg.commands.items():
         lines.append(f"      - name: {name}")
-        lines.append(f"        run: {cmd}")
+        lines.append("        run: |")
+        for cmd_line in cmd.splitlines():
+            lines.append(f"          {cmd_line}")
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"

@@ -19,7 +19,9 @@ jobs:
           python -m pip install -e .[dev]
 
       - name: test
-        run: pytest -q
+        run: |
+          pytest -q
 
       - name: lint
-        run: ruff check .
+        run: |
+          ruff check .

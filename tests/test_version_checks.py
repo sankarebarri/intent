@@ -67,6 +67,6 @@ def test_render_ci_includes_all_commands() -> None:
 
     # Commands appear as steps
     assert "- name: test" in out
-    assert "run: pytest -q" in out
+    assert "run: |\n          pytest -q" in out
     assert "- name: lint" in out
-    assert "run: ruff check ." in out
+    assert "run: |\n          ruff check ." in out
