@@ -2,6 +2,8 @@
 
 Intent is a small, boring tool that keeps project config in sync by generating tool-owned files from a single `intent.toml`.
 
+Detailed docs: [`documentation.md`](documentation.md)
+
 ## Who it's for
 
 *   **Teams** that want one source of truth for Python versions and common commands.
