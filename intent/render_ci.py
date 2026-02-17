@@ -16,7 +16,9 @@ def render_ci(cfg: IntentConfig) -> str:
     lines.append("")
 
     lines.append("name: CI")
-    lines.append("on: [push]")
+    triggers = cfg.ci_triggers or ["push"]
+    trigger_values = ", ".join(triggers)
+    lines.append(f"on: [{trigger_values}]")
     lines.append("")
     lines.append("jobs:")
     lines.append("  ci:")

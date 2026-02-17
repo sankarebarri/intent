@@ -141,6 +141,43 @@ def test_load_intent_ci_python_versions_rejects_invalid_type(tmp_path: Path) -> 
     assert "[ci].python_versions must be a non-empty array of strings" in str(excinfo.value)
 
 
+def test_load_intent_ci_triggers_custom(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [ci]
+        triggers = ["push", "pull_request"]
+        """,
+    )
+    cfg = load_intent(path)
+    assert cfg.ci_triggers == ["push", "pull_request"]
+
+
+def test_load_intent_ci_triggers_rejects_invalid_type(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [ci]
+        triggers = "push"
+        """,
+    )
+    with pytest.raises(IntentConfigError) as excinfo:
+        load_intent(path)
+    assert "[ci].triggers must be a non-empty array of strings" in str(excinfo.value)
+
+
 def test_load_intent_schema_and_policy_values(
     tmp_path: Path,
 ) -> None:

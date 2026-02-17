@@ -51,3 +51,13 @@ def test_render_ci_with_python_matrix() -> None:
     assert "matrix:" in out
     assert 'python-version: ["3.11", "3.12"]' in out
     assert "python-version: ${{ matrix.python-version }}" in out
+
+
+def test_render_ci_with_custom_triggers() -> None:
+    cfg = IntentConfig(
+        python_version="3.12",
+        commands={"test": "pytest -q"},
+        ci_triggers=["push", "pull_request"],
+    )
+    out = render_ci(cfg)
+    assert "on: [push, pull_request]" in out

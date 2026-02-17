@@ -22,6 +22,7 @@ class IntentConfig:
     commands: dict[str, str]
     ci_install: str = DEFAULT_CI_INSTALL
     ci_python_versions: list[str] | None = None
+    ci_triggers: list[str] | None = None
     policy_strict: bool = DEFAULT_POLICY_STRICT
     schema_version: int = DEFAULT_SCHEMA_VERSION
 
@@ -102,6 +103,7 @@ def load_intent(path: Path) -> IntentConfig:
 
     ci_install = DEFAULT_CI_INSTALL
     ci_python_versions: list[str] | None = None
+    ci_triggers: list[str] | None = None
     ci_section = data.get("ci")
     if ci_section is not None:
         if not isinstance(ci_section, dict):
@@ -128,6 +130,18 @@ def load_intent(path: Path) -> IntentConfig:
                     raise IntentConfigError(str(e)) from e
                 parsed_versions.append(version)
             ci_python_versions = parsed_versions
+        raw_triggers = ci_section.get("triggers")
+        if raw_triggers is not None:
+            if not isinstance(raw_triggers, list) or not raw_triggers:
+                raise IntentConfigError("[ci].triggers must be a non-empty array of strings")
+            parsed_triggers: list[str] = []
+            for idx, raw in enumerate(raw_triggers):
+                if not isinstance(raw, str) or not raw.strip():
+                    raise IntentConfigError(
+                        f"[ci].triggers[{idx}] must be a non-empty trigger string"
+                    )
+                parsed_triggers.append(raw.strip())
+            ci_triggers = parsed_triggers
     schema_version = DEFAULT_SCHEMA_VERSION
     intent_section = data.get("intent")
     if isinstance(intent_section, dict):
@@ -146,5 +160,6 @@ def load_intent(path: Path) -> IntentConfig:
         commands=commands,
         ci_install=ci_install,
         ci_python_versions=ci_python_versions,
+        ci_triggers=ci_triggers,
         policy_strict=policy_strict,
     )

@@ -29,6 +29,7 @@ lint = "ruff check ."
 [ci]
 install = "-e .[dev]"
 python_versions = ["3.11", "3.12"]
+triggers = ["push", "pull_request"]
 
 [policy]
 strict = false
@@ -51,6 +52,10 @@ Fields:
   - Optional
   - Non-empty array of Python versions for CI matrix
   - If omitted, CI uses `[python].version`
+- `[ci].triggers`
+  - Optional
+  - Non-empty array of workflow triggers
+  - If omitted, CI defaults to `["push"]`
 - `[policy].strict`
   - Optional
   - Default: `false`

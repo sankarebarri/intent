@@ -48,9 +48,11 @@ lint = "ruff check ."
 [ci]
 install = "-e .[dev]"
 python_versions = ["3.11", "3.12"]
+triggers = ["push", "pull_request"]
 # This value is used verbatim when generating CI install steps.
 # Intent does not infer dependencies, it only reflects what you declare.
 # Optional: when set, CI runs a matrix across these Python versions.
+# Optional: when set, CI uses these workflow triggers (default: ["push"]).
 
 [policy]
 strict = false
@@ -196,6 +198,7 @@ Intent supports config schema:
 | `[intent].schema_version = 1` | Current supported schema version. |
 | `[policy].strict = true/false` | Default strictness for `intent check` when no strict flag is passed. |
 | `[ci].python_versions = ["3.11", "3.12"]` | Optional CI matrix versions. If omitted, CI uses `[python].version`. |
+| `[ci].triggers = ["push", "pull_request"]` | Optional CI workflow triggers. If omitted, CI defaults to `["push"]`. |
 
 ## Bootstrapping (`intent init`)
 
