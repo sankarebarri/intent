@@ -6,7 +6,7 @@ Intent keeps project automation config in sync from a single `intent.toml`.
 - Reads: `intent.toml`, `pyproject.toml`
 - Generates baseline tool-owned files: `.github/workflows/ci.yml`, `justfile`
 
-Full reference: [`documentation.md`](documentation.md)
+Full reference: [`documentation.md`](documentation.md) and structured docs in [`docs/`](docs).
 
 ## Install
 
@@ -21,6 +21,25 @@ From source:
 ```bash
 python -m pip install -e .
 ```
+
+## Documentation Site
+
+Local preview:
+
+```bash
+python -m pip install -e ".[docs]"
+mkdocs serve
+```
+
+GitHub Pages publishing is configured via `.github/workflows/docs-pages.yml`.
+
+One-time repo setup:
+
+1. Open GitHub repo settings.
+2. Go to `Pages`.
+3. Set source to `GitHub Actions`.
+
+After that, pushes to `main` that change docs-related files will publish automatically.
 
 ## Quick Start
 

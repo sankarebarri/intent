@@ -19,6 +19,9 @@ justfile
 
 /dist
 .pypirc
+/site
+.cache/
+.mike/
 
 # Local Intent files
 intent.toml

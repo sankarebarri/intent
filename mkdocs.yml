@@ -1,0 +1,35 @@
+site_name: intent-cli
+site_description: Typed, project-agnostic CI and task-runner configuration from intent.toml
+repo_url: https://github.com/sankarebarri/intent
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+markdown_extensions:
+  - admonition
+  - codehilite
+  - tables
+nav:
+  - Home: index.md
+  - Documentation Strategy: documentation-strategy.md
+  - Getting Started: getting-started.md
+  - Configuration:
+      - Schema: config/schema.md
+      - Checks and Gates: config/checks-and-gates.md
+      - CI Jobs, Artifacts, Summary: config/ci.md
+  - CLI:
+      - Command Reference: cli/commands.md
+  - Examples:
+      - Generate Files and Drift: examples/generate-files.md
+      - Metrics, Assertions, Gates: examples/metrics-and-gates.md
+  - Integrations:
+      - Django and FastAPI: integrations/django-fastapi.md
+      - Tool Integrations: integrations/tooling.md
+  - Comparison:
+      - intent vs Other Tools: comparison.md
+  - Troubleshooting: troubleshooting.md
+  - Releases:
+      - Overview: releases/index.md
+      - 0.1.3: releases/0.1.3.md
