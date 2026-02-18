@@ -20,6 +20,13 @@ def write_intent(tmp_path: Path, content: str) -> Path:
     return path
 
 
+def write_synced_generated_files(tmp_path: Path, intent_path: Path) -> None:
+    cfg = load_intent(intent_path)
+    (tmp_path / ".github/workflows").mkdir(parents=True)
+    (tmp_path / ".github/workflows/ci.yml").write_text(render_ci(cfg), encoding="utf-8")
+    (tmp_path / "justfile").write_text(render_just(cfg), encoding="utf-8")
+
+
 def test_sync_dry_run_does_not_write_files(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     write_intent(
@@ -80,12 +87,7 @@ def test_check_passes_when_generated_files_in_sync(tmp_path: Path, monkeypatch) 
         """,
     )
 
-    cfg = load_intent(intent_path)
-
-    # create tool-owned generated files matching our renderers’ marker rule
-    (tmp_path / ".github/workflows").mkdir(parents=True)
-    (tmp_path / ".github/workflows/ci.yml").write_text(render_ci(cfg), encoding="utf-8")
-    (tmp_path / "justfile").write_text(render_just(cfg), encoding="utf-8")
+    write_synced_generated_files(tmp_path, intent_path)
 
     result = runner.invoke(app, ["check"])
     assert result.exit_code == 0
@@ -146,10 +148,7 @@ def test_check_handles_invalid_pyproject_toml_non_strict(tmp_path: Path, monkeyp
     )
 
     (tmp_path / "pyproject.toml").write_text("[project\n", encoding="utf-8")
-    cfg = load_intent(intent_path)
-    (tmp_path / ".github/workflows").mkdir(parents=True)
-    (tmp_path / ".github/workflows/ci.yml").write_text(render_ci(cfg), encoding="utf-8")
-    (tmp_path / "justfile").write_text(render_just(cfg), encoding="utf-8")
+    write_synced_generated_files(tmp_path, intent_path)
 
     result = runner.invoke(app, ["check"])
     assert result.exit_code == 0
@@ -170,10 +169,7 @@ def test_check_handles_invalid_pyproject_toml_strict(tmp_path: Path, monkeypatch
     )
 
     (tmp_path / "pyproject.toml").write_text("[project\n", encoding="utf-8")
-    cfg = load_intent(intent_path)
-    (tmp_path / ".github/workflows").mkdir(parents=True)
-    (tmp_path / ".github/workflows/ci.yml").write_text(render_ci(cfg), encoding="utf-8")
-    (tmp_path / "justfile").write_text(render_just(cfg), encoding="utf-8")
+    write_synced_generated_files(tmp_path, intent_path)
 
     result = runner.invoke(app, ["check", "--strict"])
     assert result.exit_code == 1
@@ -194,10 +190,7 @@ def test_check_json_output_success(tmp_path: Path, monkeypatch) -> None:
         """,
     )
 
-    cfg = load_intent(intent_path)
-    (tmp_path / ".github/workflows").mkdir(parents=True)
-    (tmp_path / ".github/workflows/ci.yml").write_text(render_ci(cfg), encoding="utf-8")
-    (tmp_path / "justfile").write_text(render_just(cfg), encoding="utf-8")
+    write_synced_generated_files(tmp_path, intent_path)
 
     result = runner.invoke(app, ["check", "--format", "json"])
     assert result.exit_code == 0
@@ -316,6 +309,226 @@ def test_sync_rejects_adopt_without_write(tmp_path: Path, monkeypatch) -> None:
     result = runner.invoke(app, ["sync", "--adopt"])
     assert result.exit_code == 2
     assert "[INTENT001]" in result.output
+
+
+def test_sync_show_json_outputs_resolved_payload(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+        """,
+    )
+    result = runner.invoke(app, ["sync", "--show-json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["python_version"] == "3.12"
+    assert data["sync"]["show_json"] is True
+    assert data["sync"]["generated"]["ci"] == ".github/workflows/ci.yml"
+
+
+def test_sync_show_json_with_explain_includes_mapping(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+        """,
+    )
+    result = runner.invoke(app, ["sync", "--show-json", "--explain"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    explain = data["sync"]["explain_map"]
+    assert explain is not None
+    assert explain["generated_files"][0]["path"] == ".github/workflows/ci.yml"
+
+
+def test_sync_explain_outputs_text_mapping(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+        """,
+    )
+    result = runner.invoke(app, ["sync", "--explain"])
+    assert result.exit_code == 0
+    assert "--- explain ---" in result.output
+    assert "renderer: render_ci" in result.output
+    assert "renderer: render_just" in result.output
+
+
+def test_sync_rejects_show_json_with_write(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+        """,
+    )
+    result = runner.invoke(app, ["sync", "--show-json", "--write"])
+    assert result.exit_code == 2
+    assert "[INTENT001]" in result.output
+
+
+def test_check_with_assertions_passes(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "metrics.json").write_text('{"metrics":{"score":0.95},"status":"ok"}', encoding="utf-8")
+    intent_path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        eval = "cat metrics.json"
+
+        [checks]
+        assertions = [
+          { command = "eval", path = "metrics.score", op = "gte", value = 0.9 },
+          { command = "eval", path = "status", op = "in", value = ["ok", "warn"] }
+        ]
+        """,
+    )
+    write_synced_generated_files(tmp_path, intent_path)
+
+    result = runner.invoke(app, ["check"])
+    assert result.exit_code == 0
+    assert "check assertion (eval): metrics.score gte 0.9" in result.output
+    assert "check assertion (eval): status in ['ok', 'warn']" in result.output
+
+
+def test_check_with_assertions_fails_when_threshold_misses(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "metrics.json").write_text('{"metrics":{"score":0.80}}', encoding="utf-8")
+    intent_path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        eval = "cat metrics.json"
+
+        [checks]
+        assertions = [
+          { command = "eval", path = "metrics.score", op = "gte", value = 0.9, message = "score regression gate" }
+        ]
+        """,
+    )
+    write_synced_generated_files(tmp_path, intent_path)
+
+    result = runner.invoke(app, ["check"])
+    assert result.exit_code == 1
+    assert "[INTENT401]" in result.output
+    assert "score regression gate" in result.output
+
+
+def test_check_json_output_includes_assertion_failures(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "metrics.json").write_text('{"metrics":{"score":0.80}}', encoding="utf-8")
+    intent_path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        eval = "cat metrics.json"
+
+        [checks]
+        assertions = [
+          { command = "eval", path = "metrics.score", op = "gte", value = 0.9 }
+        ]
+        """,
+    )
+    write_synced_generated_files(tmp_path, intent_path)
+
+    result = runner.invoke(app, ["check", "--format", "json"])
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["checks"][0]["ok"] is False
+    assert data["checks"][0]["code"] == "INTENT401"
+
+
+def test_check_json_output_includes_summary_metrics_delta(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "metrics.json").write_text(
+        '{"metrics":{"score":0.91,"baseline_score":0.89}}',
+        encoding="utf-8",
+    )
+    intent_path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        eval = "cat metrics.json"
+
+        [ci.summary]
+        enabled = true
+        title = "Quality"
+        metrics = [
+          { label = "score", command = "eval", path = "metrics.score", baseline_path = "metrics.baseline_score", precision = 3 }
+        ]
+        """,
+    )
+    write_synced_generated_files(tmp_path, intent_path)
+
+    result = runner.invoke(app, ["check", "--format", "json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["report"]["summary_enabled"] is True
+    assert data["report"]["summary_markdown"] is not None
+    assert data["report"]["metrics"][0]["label"] == "score"
+    assert data["report"]["metrics"][0]["delta"] == 0.02
+
+
+def test_check_json_output_fails_on_invalid_summary_metric_path(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "metrics.json").write_text('{"metrics":{"score":0.91}}', encoding="utf-8")
+    intent_path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        eval = "cat metrics.json"
+
+        [ci.summary]
+        enabled = true
+        metrics = [
+          { label = "score", command = "eval", path = "metrics.missing" }
+        ]
+        """,
+    )
+    write_synced_generated_files(tmp_path, intent_path)
+
+    result = runner.invoke(app, ["check", "--format", "json"])
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["report"]["metrics"][0]["ok"] is False
 
 
 def test_check_uses_policy_strict_by_default(tmp_path: Path, monkeypatch) -> None:

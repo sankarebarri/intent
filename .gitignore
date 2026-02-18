@@ -6,8 +6,6 @@ __pycache__/
 # Editors
 .idea/
 .vscode/
-ROADMAP.md
-roadmap.md
 FEATURE_TESTING.md
 # README.md
 
@@ -26,3 +24,7 @@ justfile
 intent.toml
 tox.ini
 noxfile.py
+
+# roadmaps
+ROADMAP.md
+roadmap*.md

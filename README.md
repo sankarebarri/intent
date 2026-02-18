@@ -4,7 +4,7 @@ Intent keeps project automation config in sync from a single `intent.toml`.
 
 - Source of truth: `intent.toml`
 - Reads: `intent.toml`, `pyproject.toml`
-- Generates tool-owned files: `.github/workflows/ci.yml`, `justfile`
+- Generates baseline tool-owned files: `.github/workflows/ci.yml`, `justfile`
 
 Full reference: [`documentation.md`](documentation.md)
 
@@ -13,7 +13,7 @@ Full reference: [`documentation.md`](documentation.md)
 From PyPI:
 
 ```bash
-python -m pip install intent
+python -m pip install intent-cli
 ```
 
 From source:
@@ -36,6 +36,12 @@ intent init
 intent sync --write
 ```
 
+This bootstraps a baseline CI workflow and `justfile` from your `intent.toml`.
+If you configure `[checks].assertions`, `intent check` evaluates typed JSON assertions on command output.
+If you configure `[[ci.jobs]]`, Intent generates workflow jobs from typed job/step definitions instead of the baseline single-job template.
+If you configure `[[ci.artifacts]]`, Intent generates upload steps for `actions/upload-artifact`.
+If you configure `[ci.summary]`, Intent can publish a built-in markdown summary to `GITHUB_STEP_SUMMARY`.
+
 3. Verify drift in CI/pre-commit:
 
 ```bash
@@ -54,6 +60,12 @@ version = "3.12"
 [commands]
 test = "pytest -q"
 lint = "ruff check ."
+eval = "cat metrics.json"
+
+[checks]
+assertions = [
+  { command = "eval", path = "summary.score", op = "gte", value = 0.9 }
+]
 
 [ci]
 install = "-e .[dev]"
@@ -72,6 +84,9 @@ strict = false
 | `intent init --starter tox` | Generate tool-owned `tox.ini` starter (reuses existing `intent.toml`). |
 | `intent init --starter nox` | Generate tool-owned `noxfile.py` starter (reuses existing `intent.toml`). |
 | `intent sync` | Show config + version checks. |
+| `intent sync --show-json` | Print resolved sync config as JSON. |
+| `intent sync --show-json --explain` | Include generated-file mapping details in JSON. |
+| `intent sync --explain` | Show text mapping from intent config to generated blocks. |
 | `intent sync --dry-run` | Preview file changes without writing. |
 | `intent sync --write` | Write generated files. |
 | `intent sync --write --adopt` | Adopt matching non-owned generated files. |
@@ -82,12 +97,57 @@ strict = false
 | `intent reconcile --plan` | Preview Python-version reconciliation. |
 | `intent reconcile --apply --allow-existing` | Apply reconciliation including existing-file edits. |
 
+## Typed CI Jobs
+
+```toml
+[commands]
+lint = "ruff check ."
+test = "pytest -q"
+
+[[ci.jobs]]
+name = "lint"
+steps = [{ uses = "actions/checkout@v4" }, { command = "lint" }]
+
+[[ci.jobs]]
+name = "test"
+needs = ["lint"]
+timeout_minutes = 20
+matrix = { python-version = ["3.11", "3.12"] }
+steps = [
+  { uses = "actions/setup-python@v5", with = { python-version = "${{ matrix.python-version }}" } },
+  { command = "test", continue_on_error = false }
+]
+```
+
+## CI Artifacts
+
+```toml
+[ci]
+artifacts = [
+  { name = "junit", path = "reports/junit.xml", retention_days = 7, when = "on-failure" },
+  { name = "coverage", path = "coverage.xml", when = "always" }
+]
+```
+
+## CI Summary
+
+```toml
+[ci.summary]
+enabled = true
+title = "Quality Report"
+include_assertions = true
+metrics = [
+  { label = "score", command = "eval", path = "metrics.score", baseline_path = "metrics.prev_score", precision = 3 }
+]
+```
+
 ## Safety Model
 
 - Writes only tool-owned files in normal sync flow.
 - Refuses unsafe overwrite unless explicitly requested.
 - Supports explicit ownership modes: `strict`, `adopt`, `force`.
 - Uses stable error codes (`INTENTxxx`) for automation.
+- Supports typed quality assertions via `[checks].assertions` in `intent.toml`.
 
 ## Pre-commit Hook
 

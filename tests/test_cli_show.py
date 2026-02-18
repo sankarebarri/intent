@@ -77,3 +77,75 @@ def test_show_json_missing_intent_returns_error_code(tmp_path: Path, monkeypatch
     data = json.loads(result.output)
     assert data["ok"] is False
     assert data["code"] == "INTENT002"
+
+
+def test_show_json_includes_ci_jobs_when_configured(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [[ci.jobs]]
+        name = "test"
+        steps = [{ command = "test" }]
+        """,
+    )
+
+    result = runner.invoke(app, ["show", "--format", "json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert len(data["ci_jobs"]) == 1
+    assert data["ci_jobs"][0]["name"] == "test"
+
+
+def test_show_json_includes_ci_artifacts_when_configured(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [ci]
+        artifacts = [{ name = "logs", path = "logs/**", when = "on-success" }]
+        """,
+    )
+
+    result = runner.invoke(app, ["show", "--format", "json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert len(data["ci_artifacts"]) == 1
+    assert data["ci_artifacts"][0]["name"] == "logs"
+
+
+def test_show_json_includes_ci_summary_when_configured(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        eval = "cat metrics.json"
+
+        [ci.summary]
+        enabled = true
+        title = "Quality"
+        metrics = [{ label = "score", command = "eval", path = "metrics.score" }]
+        """,
+    )
+
+    result = runner.invoke(app, ["show", "--format", "json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ci_summary"]["enabled"] is True
+    assert data["ci_summary"]["title"] == "Quality"

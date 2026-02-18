@@ -9,7 +9,8 @@ Extended reference for configuring and using `intent`.
 - Generates tool-owned files:
   - `.github/workflows/ci.yml`
   - `justfile`
-- Refuses unsafe overwrites of non tool-owned generated files.
+- These generated files are baseline automation scaffolding you can extend as needed.
+- Refuses unsafe overwrites of non-tool-owned generated files.
 
 ## Configuration Reference
 
@@ -25,6 +26,7 @@ version = "3.12"
 [commands]
 test = "pytest -q"
 lint = "ruff check ."
+eval = "cat metrics.json"
 
 [ci]
 install = "-e .[dev]"
@@ -39,6 +41,11 @@ strict = false
 [plugins]
 check = ["./scripts/intent-check.sh"]
 generate = ["./scripts/intent-generate.sh"]
+
+[checks]
+assertions = [
+  { command = "eval", path = "metrics.score", op = "gte", value = 0.9, message = "score gate" }
+]
 ```
 
 Fields:
@@ -66,6 +73,62 @@ Fields:
   - Optional
   - Non-empty array of workflow triggers
   - If omitted, CI defaults to `["push"]`
+- `[checks].assertions`
+  - Optional
+  - Array of assertion tables evaluated during `intent check`
+  - Each assertion supports:
+    - `command`: command key from `[commands]` (required)
+    - `path`: JSON path into command stdout payload (required)
+    - `op`: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `not_in` (required)
+    - `value`: expected value for comparison (required)
+    - `message`: optional failure context
+  - Commands referenced by assertions must exit `0` and emit valid JSON to stdout
+- `[ci].jobs`
+  - Optional
+  - Non-empty array of job tables (`[[ci.jobs]]`)
+  - When present, CI generation uses these typed jobs instead of the baseline single `ci` job template
+  - Job fields:
+    - `name` (required)
+    - `runs_on` (optional, default `ubuntu-latest`)
+    - `needs` (optional array of job names)
+    - `if` (optional string)
+    - `timeout_minutes` (optional positive integer)
+    - `continue_on_error` (optional boolean)
+    - `matrix` (optional table of non-empty arrays with scalar values)
+    - `steps` (required non-empty array of step tables)
+  - Step fields:
+    - Exactly one of `run`, `command`, `uses` is required
+    - `command` must reference a key in `[commands]`
+    - `name`, `if`, `continue_on_error`, `working_directory` (all optional)
+    - `env` (optional table of string values)
+    - `with` (optional table of string values, used with `uses`)
+- `[ci].artifacts`
+  - Optional
+  - Non-empty array of artifact tables (`[[ci.artifacts]]`)
+  - Artifact fields:
+    - `name` (required)
+    - `path` (required)
+    - `retention_days` (optional positive integer)
+    - `when` (optional: `always`, `on-failure`, `on-success`; default `always`)
+  - Renders upload steps using `actions/upload-artifact@v4`
+- `[ci].summary`
+  - Optional
+  - Summary/report controls for workflow and `intent check --format json`
+  - Fields:
+    - `enabled` (optional boolean, default `true`)
+    - `title` (optional string, default `Intent CI Summary`)
+    - `include_assertions` (optional boolean, default `true`)
+    - `metrics` (optional array of metric tables)
+  - Metric fields:
+    - `label` (required)
+    - `command` (required, must reference `[commands]`)
+    - `path` (required JSON path into command stdout JSON)
+    - `baseline_path` (optional JSON path for delta calculation)
+    - `precision` (optional integer >= 0)
+  - When enabled:
+    - baseline CI gets a summary step that writes markdown to `GITHUB_STEP_SUMMARY`
+    - custom-job CI gets an additional `intent_summary` job
+    - `intent check --format json` includes `report.summary_markdown` and `report.metrics`
 - `[policy].pack`
   - Optional
   - Supported values: `default`, `strict`
@@ -83,6 +146,94 @@ Fields:
   - Optional
   - Array of shell commands to run after `intent sync --write`
   - Any non-zero exit fails with `INTENT301`
+
+## Checks Assertions Examples
+
+Minimal metric threshold:
+
+```toml
+[commands]
+eval = "cat metrics.json"
+
+[checks]
+assertions = [
+  { command = "eval", path = "metrics.score", op = "gte", value = 0.9 }
+]
+```
+
+## CI Jobs Examples
+
+Typed jobs with dependencies and matrix:
+
+```toml
+[commands]
+lint = "ruff check ."
+test = "pytest -q"
+
+[[ci.jobs]]
+name = "lint"
+steps = [
+  { uses = "actions/checkout@v4" },
+  { command = "lint" }
+]
+
+[[ci.jobs]]
+name = "test"
+needs = ["lint"]
+timeout_minutes = 20
+matrix = { python-version = ["3.11", "3.12"] }
+steps = [
+  { uses = "actions/setup-python@v5", with = { python-version = "${{ matrix.python-version }}" } },
+  { command = "test", env = { PYTHONUNBUFFERED = "1" }, working_directory = "." }
+]
+```
+
+Step-level shell escape hatch:
+
+```toml
+[[ci.jobs]]
+name = "smoke"
+steps = [
+  { run = "echo custom shell logic && ./scripts/smoke.sh" }
+]
+```
+
+Artifacts:
+
+```toml
+[ci]
+artifacts = [
+  { name = "junit", path = "reports/junit.xml", retention_days = 7, when = "on-failure" },
+  { name = "coverage", path = "coverage.xml", when = "always" }
+]
+```
+
+Summary/report configuration:
+
+```toml
+[ci.summary]
+enabled = true
+title = "Quality Report"
+include_assertions = true
+metrics = [
+  { label = "score", command = "eval", path = "metrics.score", baseline_path = "metrics.prev_score", precision = 3 },
+  { label = "latency_p95_ms", command = "eval", path = "perf.latency_p95", precision = 1 }
+]
+```
+
+Multiple assertions with list membership and array indexing:
+
+```toml
+[commands]
+eval = "cat eval.json"
+
+[checks]
+assertions = [
+  { command = "eval", path = "summary.status", op = "in", value = ["ok", "warn"] },
+  { command = "eval", path = "runs[0].latency_ms", op = "lt", value = 200, message = "p95 latency regression" },
+  { command = "eval", path = "summary.dataset", op = "not_in", value = ["deprecated", "unknown"] }
+]
+```
 
 ## Command Reference
 
@@ -106,6 +257,12 @@ Fields:
   - Machine-readable resolved config
 - `intent sync`
   - Print config + version checks
+- `intent sync --show-json`
+  - Emit resolved sync config as machine-readable JSON
+- `intent sync --show-json --explain`
+  - Include mapping details from intent fields to generated file blocks in JSON
+- `intent sync --explain`
+  - Print text mapping from intent fields to generated file blocks
 - `intent sync --show-ci`
   - Preview rendered CI workflow
 - `intent sync --show-just`
@@ -119,9 +276,11 @@ Fields:
   - Adopt non-owned generated files only when existing body matches
 - `intent sync --write --force`
   - Explicitly overwrite non-owned generated files
+  - `--show-json` and `--explain` cannot be combined with `--write`
 - `intent check`
   - Detect drift without writing
   - Also run optional `[plugins].check` hooks
+  - Also run optional `[checks].assertions` gates
 - `intent check --strict`
   - Strict version compatibility behavior
 - `intent check --no-strict`
@@ -170,6 +329,7 @@ When `pyproject.toml` contains an unsupported or invalid `requires-python` value
 - `INTENT202`: generated file not tool-owned
 - `INTENT203`: generated file out of date
 - `INTENT301`: plugin hook command failed
+- `INTENT401`: check assertion failed
 
 ## Safety Model
 

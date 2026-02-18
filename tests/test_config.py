@@ -218,6 +218,70 @@ def test_load_intent_ci_triggers_rejects_invalid_type(tmp_path: Path) -> None:
     assert "[ci].triggers must be a non-empty array of strings" in str(excinfo.value)
 
 
+def test_load_intent_checks_assertions_valid(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        eval = "cat metrics.json"
+
+        [checks]
+        assertions = [
+          { command = "eval", path = "metrics.score", op = "gte", value = 0.9, message = "score gate" }
+        ]
+        """,
+    )
+    cfg = load_intent(path)
+    assert cfg.checks_assertions is not None
+    assertion = cfg.checks_assertions[0]
+    assert assertion.command == "eval"
+    assert assertion.path == "metrics.score"
+    assert assertion.op == "gte"
+    assert assertion.value == 0.9
+    assert assertion.message == "score gate"
+
+
+def test_load_intent_checks_assertions_rejects_unknown_command(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [checks]
+        assertions = [{ command = "eval", path = "metrics.score", op = "gte", value = 0.9 }]
+        """,
+    )
+    with pytest.raises(IntentConfigError) as excinfo:
+        load_intent(path)
+    assert "unknown command" in str(excinfo.value)
+
+
+def test_load_intent_checks_assertions_rejects_invalid_operator(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        eval = "cat metrics.json"
+
+        [checks]
+        assertions = [{ command = "eval", path = "metrics.score", op = "between", value = 0.9 }]
+        """,
+    )
+    with pytest.raises(IntentConfigError) as excinfo:
+        load_intent(path)
+    assert "invalid [checks].assertions[0].op" in str(excinfo.value)
+
+
 def test_load_intent_schema_and_policy_values(
     tmp_path: Path,
 ) -> None:
@@ -438,3 +502,171 @@ def test_load_intent_plugins_generate_rejects_empty_item(tmp_path: Path) -> None
     with pytest.raises(IntentConfigError) as excinfo:
         load_intent(path)
     assert "invalid [plugins].generate[0]" in str(excinfo.value)
+
+
+def test_load_intent_ci_jobs_valid(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+        lint = "ruff check ."
+
+        [[ci.jobs]]
+        name = "lint"
+        steps = [
+          { uses = "actions/checkout@v4" },
+          { command = "lint" }
+        ]
+
+        [[ci.jobs]]
+        name = "test"
+        needs = ["lint"]
+        timeout_minutes = 20
+        continue_on_error = true
+        matrix = { python-version = ["3.11", "3.12"] }
+
+        steps = [
+          { uses = "actions/setup-python@v5", with = { python-version = "${{ matrix.python-version }}" } },
+          { command = "test", if = "${{ always() }}", working_directory = ".", env = { PYTHONUNBUFFERED = "1" } }
+        ]
+        """,
+    )
+    cfg = load_intent(path)
+    assert cfg.ci_jobs is not None
+    assert len(cfg.ci_jobs) == 2
+    assert cfg.ci_jobs[0].name == "lint"
+    assert cfg.ci_jobs[1].needs == ["lint"]
+    assert cfg.ci_jobs[1].matrix == {"python-version": ["3.11", "3.12"]}
+
+
+def test_load_intent_ci_jobs_rejects_unknown_needs_job(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [[ci.jobs]]
+        name = "test"
+        needs = ["lint"]
+        steps = [{ command = "test" }]
+        """,
+    )
+    with pytest.raises(IntentConfigError) as excinfo:
+        load_intent(path)
+    assert "unknown job 'lint'" in str(excinfo.value)
+
+
+def test_load_intent_ci_jobs_rejects_step_with_multiple_actions(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [[ci.jobs]]
+        name = "test"
+        steps = [{ command = "test", run = "pytest -q" }]
+        """,
+    )
+    with pytest.raises(IntentConfigError) as excinfo:
+        load_intent(path)
+    assert "set exactly one of run, command, uses" in str(excinfo.value)
+
+
+def test_load_intent_ci_artifacts_valid(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [ci]
+        artifacts = [
+          { name = "junit", path = "reports/junit.xml", retention_days = 7, when = "on-failure" },
+          { name = "coverage", path = "coverage.xml" }
+        ]
+        """,
+    )
+    cfg = load_intent(path)
+    assert cfg.ci_artifacts is not None
+    assert len(cfg.ci_artifacts) == 2
+    assert cfg.ci_artifacts[0].when == "on-failure"
+    assert cfg.ci_artifacts[1].when == "always"
+
+
+def test_load_intent_ci_artifacts_rejects_invalid_when(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [ci]
+        artifacts = [{ name = "junit", path = "reports/junit.xml", when = "on-error" }]
+        """,
+    )
+    with pytest.raises(IntentConfigError) as excinfo:
+        load_intent(path)
+    assert "invalid [ci].artifacts[0].when" in str(excinfo.value)
+
+
+def test_load_intent_ci_summary_with_metrics_valid(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        eval = "cat metrics.json"
+
+        [ci.summary]
+        enabled = true
+        title = "Quality Report"
+        include_assertions = true
+        metrics = [
+          { label = "score", command = "eval", path = "metrics.score", baseline_path = "metrics.prev_score", precision = 3 }
+        ]
+        """,
+    )
+    cfg = load_intent(path)
+    assert cfg.ci_summary is not None
+    assert cfg.ci_summary.title == "Quality Report"
+    assert cfg.ci_summary.metrics is not None
+    assert cfg.ci_summary.metrics[0].label == "score"
+
+
+def test_load_intent_ci_summary_rejects_unknown_metric_command(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [ci.summary]
+        metrics = [{ label = "score", command = "eval", path = "metrics.score" }]
+        """,
+    )
+    with pytest.raises(IntentConfigError) as excinfo:
+        load_intent(path)
+    assert "invalid [ci].summary.metrics[0].command" in str(excinfo.value)

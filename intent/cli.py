@@ -10,7 +10,7 @@ from typing import Literal
 import typer
 
 from . import __version__
-from .config import IntentConfigError, load_intent
+from .config import CheckAssertion, CiSummaryMetric, IntentConfigError, load_intent
 from .fs import GENERATED_MARKER, OwnershipError, write_generated_file
 from .pyproject_reader import PyprojectPythonStatus, read_pyproject_python
 from .render_ci import render_ci
@@ -34,6 +34,7 @@ ERR_FILE_MISSING = "INTENT201"
 ERR_FILE_UNOWNED = "INTENT202"
 ERR_FILE_OUTDATED = "INTENT203"
 ERR_PLUGIN = "INTENT301"
+ERR_CHECK = "INTENT401"
 
 
 @app.callback()
@@ -95,6 +96,442 @@ def _run_plugin_hooks(hooks: list[str] | None, stage: str) -> list[dict]:
             }
         )
     return results
+
+
+def _run_json_commands(commands: dict[str, str], command_names: set[str]) -> dict[str, dict]:
+    results: dict[str, dict] = {}
+    for command_name in sorted(command_names):
+        command = commands[command_name]
+        proc = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+        )
+        stdout = proc.stdout.strip()
+        stderr = proc.stderr.strip()
+        if proc.returncode != 0:
+            results[command_name] = {
+                "ok": False,
+                "error": f"command failed with exit code {proc.returncode}",
+                "stdout": stdout,
+                "stderr": stderr,
+            }
+            continue
+
+        try:
+            payload = json.loads(stdout)
+        except json.JSONDecodeError as e:
+            results[command_name] = {
+                "ok": False,
+                "error": f"stdout is not valid JSON: {e.msg}",
+                "stdout": stdout,
+                "stderr": stderr,
+            }
+            continue
+
+        results[command_name] = {
+            "ok": True,
+            "payload": payload,
+            "stdout": stdout,
+            "stderr": stderr,
+        }
+    return results
+
+
+def _json_path_tokens(path: str) -> list[str | int]:
+    tokens: list[str | int] = []
+    if not path or not path.strip():
+        raise ValueError("path cannot be empty")
+
+    for part in path.split("."):
+        if not part:
+            raise ValueError(f"invalid path segment in {path!r}")
+        pos = 0
+        key_match = re.match(r"[A-Za-z0-9_-]+", part[pos:])
+        if not key_match:
+            raise ValueError(f"invalid key segment in {path!r}")
+        key = key_match.group(0)
+        tokens.append(key)
+        pos += len(key)
+
+        while pos < len(part):
+            index_match = re.match(r"\[(\d+)\]", part[pos:])
+            if not index_match:
+                raise ValueError(f"invalid index segment in {path!r}")
+            tokens.append(int(index_match.group(1)))
+            pos += len(index_match.group(0))
+    return tokens
+
+
+def _resolve_json_path(payload: object, path: str) -> tuple[bool, object | None, str | None]:
+    try:
+        tokens = _json_path_tokens(path)
+    except ValueError as e:
+        return False, None, str(e)
+
+    cur: object = payload
+    for token in tokens:
+        if isinstance(token, str):
+            if not isinstance(cur, dict):
+                return False, None, f"path segment {token!r} expects object, got {type(cur).__name__}"
+            if token not in cur:
+                return False, None, f"path segment {token!r} missing"
+            cur = cur[token]
+        else:
+            if not isinstance(cur, list):
+                return False, None, f"path index [{token}] expects array, got {type(cur).__name__}"
+            if token >= len(cur):
+                return False, None, f"path index [{token}] out of range"
+            cur = cur[token]
+    return True, cur, None
+
+
+def _compare_assertion(actual: object, op: str, expected: object) -> tuple[bool, str | None]:
+    if op == "eq":
+        return actual == expected, None
+    if op == "ne":
+        return actual != expected, None
+
+    if op == "in":
+        if not isinstance(expected, list):
+            return False, "expected array for 'in' operator"
+        return actual in expected, None
+    if op == "not_in":
+        if not isinstance(expected, list):
+            return False, "expected array for 'not_in' operator"
+        return actual not in expected, None
+
+    try:
+        if op == "gt":
+            return actual > expected, None
+        if op == "gte":
+            return actual >= expected, None
+        if op == "lt":
+            return actual < expected, None
+        if op == "lte":
+            return actual <= expected, None
+    except TypeError:
+        return False, f"incompatible types for operator {op!r}"
+
+    return False, f"unsupported operator {op!r}"
+
+
+def _run_check_assertions(
+    assertions: list[CheckAssertion] | None,
+    command_results: dict[str, dict],
+) -> list[dict]:
+    if not assertions:
+        return []
+
+    results: list[dict] = []
+    for assertion in assertions:
+        command_result = command_results[assertion.command]
+        base = {
+            "command": assertion.command,
+            "path": assertion.path,
+            "op": assertion.op,
+            "expected": assertion.value,
+            "message": assertion.message,
+            "code": None,
+        }
+        if not command_result["ok"]:
+            results.append(
+                {
+                    **base,
+                    "ok": False,
+                    "actual": None,
+                    "reason": command_result["error"],
+                    "code": ERR_CHECK,
+                }
+            )
+            continue
+
+        found, actual, path_error = _resolve_json_path(command_result["payload"], assertion.path)
+        if not found:
+            results.append(
+                {
+                    **base,
+                    "ok": False,
+                    "actual": None,
+                    "reason": path_error,
+                    "code": ERR_CHECK,
+                }
+            )
+            continue
+
+        ok, compare_error = _compare_assertion(actual, assertion.op, assertion.value)
+        results.append(
+            {
+                **base,
+                "ok": ok,
+                "actual": actual,
+                "reason": compare_error if compare_error else None,
+                "code": None if ok else ERR_CHECK,
+            }
+        )
+    return results
+
+
+def _is_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _apply_precision(value: object, precision: int | None) -> object:
+    if precision is None or not _is_number(value):
+        return value
+    return round(float(value), precision)
+
+
+def _evaluate_summary_metrics(
+    metrics: list[CiSummaryMetric] | None,
+    command_results: dict[str, dict],
+) -> list[dict]:
+    if not metrics:
+        return []
+    results: list[dict] = []
+    for metric in metrics:
+        command_result = command_results[metric.command]
+        base = {
+            "label": metric.label,
+            "command": metric.command,
+            "path": metric.path,
+            "baseline_path": metric.baseline_path,
+            "precision": metric.precision,
+            "code": None,
+        }
+        if not command_result["ok"]:
+            results.append(
+                {
+                    **base,
+                    "ok": False,
+                    "value": None,
+                    "baseline": None,
+                    "delta": None,
+                    "reason": command_result["error"],
+                    "code": ERR_CHECK,
+                }
+            )
+            continue
+
+        payload = command_result["payload"]
+        found_value, value, value_error = _resolve_json_path(payload, metric.path)
+        if not found_value:
+            results.append(
+                {
+                    **base,
+                    "ok": False,
+                    "value": None,
+                    "baseline": None,
+                    "delta": None,
+                    "reason": value_error,
+                    "code": ERR_CHECK,
+                }
+            )
+            continue
+
+        baseline = None
+        delta = None
+        reason: str | None = None
+        if metric.baseline_path:
+            found_baseline, baseline_value, baseline_error = _resolve_json_path(
+                payload, metric.baseline_path
+            )
+            if not found_baseline:
+                results.append(
+                    {
+                        **base,
+                        "ok": False,
+                        "value": _apply_precision(value, metric.precision),
+                        "baseline": None,
+                        "delta": None,
+                        "reason": baseline_error,
+                        "code": ERR_CHECK,
+                    }
+                )
+                continue
+            baseline = baseline_value
+            if _is_number(value) and _is_number(baseline):
+                delta = float(value) - float(baseline)
+            else:
+                reason = "delta requires numeric value and baseline"
+
+        results.append(
+            {
+                **base,
+                "ok": True,
+                "value": _apply_precision(value, metric.precision),
+                "baseline": _apply_precision(baseline, metric.precision),
+                "delta": _apply_precision(delta, metric.precision),
+                "reason": reason,
+            }
+        )
+    return results
+
+
+def _render_summary_markdown(
+    title: str,
+    include_assertions: bool,
+    assertions: list[dict],
+    metrics: list[dict],
+) -> str:
+    lines = [f"## {title}", ""]
+    if include_assertions:
+        total = len(assertions)
+        passed = sum(1 for item in assertions if item["ok"])
+        failed = total - passed
+        lines.append("### Assertions")
+        lines.append("")
+        lines.append(f"- Passed: {passed}")
+        lines.append(f"- Failed: {failed}")
+        lines.append("")
+    if metrics:
+        lines.append("### Metrics")
+        lines.append("")
+        lines.append("| Metric | Value | Baseline | Delta |")
+        lines.append("| --- | ---: | ---: | ---: |")
+        for metric in metrics:
+            value = metric["value"] if metric["value"] is not None else "-"
+            baseline = metric["baseline"] if metric["baseline"] is not None else "-"
+            delta = metric["delta"] if metric["delta"] is not None else "-"
+            lines.append(f"| {metric['label']} | {value} | {baseline} | {delta} |")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def _resolved_payload(path: Path, cfg: object) -> dict:
+    pyproject_status, pyproject_requires_python = read_pyproject_python()
+    return {
+        "ok": True,
+        "intent_path": str(path),
+        "schema_version": cfg.schema_version,
+        "python_version": cfg.python_version,
+        "policy_pack": cfg.policy_pack,
+        "policy_strict": cfg.policy_strict,
+        "ci_install": cfg.ci_install,
+        "commands": cfg.commands,
+        "ci_jobs": [
+            {
+                "name": job.name,
+                "runs_on": job.runs_on,
+                "needs": job.needs,
+                "if": job.if_condition,
+                "timeout_minutes": job.timeout_minutes,
+                "continue_on_error": job.continue_on_error,
+                "matrix": job.matrix,
+                "steps": [
+                    {
+                        "name": step.name,
+                        "run": step.run,
+                        "command": step.command,
+                        "uses": step.uses,
+                        "with": step.with_args,
+                        "if": step.if_condition,
+                        "continue_on_error": step.continue_on_error,
+                        "working_directory": step.working_directory,
+                        "env": step.env,
+                    }
+                    for step in (job.steps or [])
+                ],
+            }
+            for job in (cfg.ci_jobs or [])
+        ],
+        "ci_artifacts": [
+            {
+                "name": artifact.name,
+                "path": artifact.path,
+                "retention_days": artifact.retention_days,
+                "when": artifact.when,
+            }
+            for artifact in (cfg.ci_artifacts or [])
+        ],
+        "ci_summary": (
+            {
+                "enabled": cfg.ci_summary.enabled,
+                "title": cfg.ci_summary.title,
+                "include_assertions": cfg.ci_summary.include_assertions,
+                "metrics": [
+                    {
+                        "label": metric.label,
+                        "command": metric.command,
+                        "path": metric.path,
+                        "baseline_path": metric.baseline_path,
+                        "precision": metric.precision,
+                    }
+                    for metric in (cfg.ci_summary.metrics or [])
+                ],
+            }
+            if cfg.ci_summary
+            else None
+        ),
+        "checks": [
+            {
+                "command": assertion.command,
+                "path": assertion.path,
+                "op": assertion.op,
+                "value": assertion.value,
+                "message": assertion.message,
+            }
+            for assertion in (cfg.checks_assertions or [])
+        ],
+        "pyproject": {
+            "status": pyproject_status.value,
+            "requires_python": pyproject_requires_python,
+        },
+    }
+
+
+def _sync_explain_payload(cfg: object) -> dict:
+    workflow_steps = ["checkout", "setup-python", "install-deps"]
+    if cfg.ci_jobs:
+        workflow_steps = ["custom-jobs"]
+
+    return {
+        "generated_files": [
+            {
+                "path": ".github/workflows/ci.yml",
+                "renderer": "render_ci",
+                "inputs": [
+                    "[python].version",
+                    "[commands]",
+                    "[ci].install",
+                    "[ci].cache",
+                    "[ci].python_versions",
+                    "[ci].triggers",
+                    "[ci].jobs",
+                    "[ci].artifacts",
+                    "[ci].summary",
+                ],
+                "blocks": workflow_steps,
+                "owned": True,
+            },
+            {
+                "path": "justfile",
+                "renderer": "render_just",
+                "inputs": ["[commands]"],
+                "blocks": ["recipes-from-commands"],
+                "owned": True,
+            },
+        ]
+    }
+
+
+def _print_sync_explain_text(cfg: object) -> None:
+    typer.echo("--- explain ---")
+    typer.echo(".github/workflows/ci.yml")
+    typer.echo("  renderer: render_ci")
+    typer.echo(
+        "  inputs: [python].version, [commands], [ci].install, [ci].cache, "
+        "[ci].python_versions, [ci].triggers, [ci].jobs, [ci].artifacts, [ci].summary"
+    )
+    if cfg.ci_jobs:
+        typer.echo("  blocks: custom-jobs")
+    else:
+        typer.echo("  blocks: checkout, setup-python, install-deps, command-steps")
+    typer.echo("justfile")
+    typer.echo("  renderer: render_just")
+    typer.echo("  inputs: [commands]")
+    typer.echo("  blocks: recipes-from-commands")
 
 
 def _check_versions(cfg_python: str, strict: bool) -> tuple[bool, str, str | None]:
@@ -513,21 +950,9 @@ def show(
         typer.echo(f"[{ERR_CONFIG_INVALID}] Config error: {e}", err=True)
         raise typer.Exit(code=2)
 
-    pyproject_status, pyproject_requires_python = read_pyproject_python()
-    resolved = {
-        "ok": True,
-        "intent_path": str(path),
-        "schema_version": cfg.schema_version,
-        "python_version": cfg.python_version,
-        "policy_pack": cfg.policy_pack,
-        "policy_strict": cfg.policy_strict,
-        "ci_install": cfg.ci_install,
-        "commands": cfg.commands,
-        "pyproject": {
-            "status": pyproject_status.value,
-            "requires_python": pyproject_requires_python,
-        },
-    }
+    resolved = _resolved_payload(path, cfg)
+    pyproject_status = PyprojectPythonStatus(resolved["pyproject"]["status"])
+    pyproject_requires_python = resolved["pyproject"]["requires_python"]
 
     if output_format == "json":
         typer.echo(json.dumps(resolved))
@@ -542,6 +967,27 @@ def show(
     typer.echo("Commands:")
     for name, cmd in cfg.commands.items():
         typer.echo(f"  {name} -> {cmd}")
+    if cfg.ci_jobs:
+        typer.echo("CI jobs:")
+        for job in cfg.ci_jobs:
+            typer.echo(f"  {job.name} ({len(job.steps or [])} steps)")
+    if cfg.ci_artifacts:
+        typer.echo("CI artifacts:")
+        for artifact in cfg.ci_artifacts:
+            typer.echo(f"  {artifact.name}: {artifact.path} ({artifact.when})")
+    if cfg.ci_summary:
+        typer.echo(
+            f"CI summary: enabled={cfg.ci_summary.enabled} "
+            f"metrics={len(cfg.ci_summary.metrics or [])}"
+        )
+    if cfg.checks_assertions:
+        typer.echo("Checks:")
+        for assertion in cfg.checks_assertions:
+            typer.echo(
+                "  "
+                f"{assertion.command}: {assertion.path} {assertion.op} "
+                f"{assertion.value!r}"
+            )
     typer.echo(f"Pyproject status: {pyproject_status.value}")
     if pyproject_requires_python is not None:
         typer.echo(f"Pyproject requires-python: {pyproject_requires_python}")
@@ -552,6 +998,8 @@ def sync(
     intent_path: str = "intent.toml",
     show_ci: bool = False,
     show_just: bool = False,
+    show_json: bool = False,
+    explain: bool = False,
     write: bool = False,
     dry_run: bool = False,
     adopt: bool = False,
@@ -576,6 +1024,9 @@ def sync(
     if (adopt or force) and not write:
         typer.echo(f"[{ERR_USAGE_CONFLICT}] Error: --adopt/--force require --write", err=True)
         raise typer.Exit(code=2)
+    if (show_json or explain) and write:
+        typer.echo(f"[{ERR_USAGE_CONFLICT}] Error: --show-json/--explain cannot be used with --write", err=True)
+        raise typer.Exit(code=2)
 
     path = Path(intent_path)
 
@@ -589,17 +1040,35 @@ def sync(
         typer.echo(f"[{ERR_CONFIG_INVALID}] Config error: {e}", err=True)
         raise typer.Exit(code=2)
 
+    ci_path = Path(".github/workflows/ci.yml")
+    just_path = Path("justfile")
+    ci_content = render_ci(cfg)
+    just_content = render_just(cfg)
+
+    if show_json:
+        payload = _resolved_payload(path, cfg)
+        payload["sync"] = {
+            "show_json": True,
+            "explain": explain,
+            "generated": {
+                "ci": str(ci_path),
+                "justfile": str(just_path),
+            },
+            "explain_map": _sync_explain_payload(cfg) if explain else None,
+        }
+        typer.echo(json.dumps(payload))
+        raise typer.Exit(code=0)
+
+    if explain:
+        _print_sync_explain_text(cfg)
+        raise typer.Exit(code=0)
+
     if not write and not dry_run:
         typer.echo(f"Intent python version: {cfg.python_version}")
         typer.echo("Intent commands: " + ", ".join(cfg.commands.keys()))
 
     ok_versions, msg_versions, _ = _check_versions(cfg.python_version, strict=False)
     typer.echo(msg_versions)
-
-    ci_path = Path(".github/workflows/ci.yml")
-    just_path = Path("justfile")
-    ci_content = render_ci(cfg)
-    just_content = render_just(cfg)
 
     if show_ci:
         typer.echo("\n--- ci.yml (preview) ---\n")
@@ -706,6 +1175,23 @@ def check(
     ci_ok, ci_msg, ci_code = _generated_drift_status(ci_path, render_ci(cfg))
     just_ok, just_msg, just_code = _generated_drift_status(just_path, render_just(cfg))
     plugin_results = _run_plugin_hooks(cfg.plugin_check_hooks, stage="check")
+    commands_for_json: set[str] = {item.command for item in (cfg.checks_assertions or [])}
+    if cfg.ci_summary and cfg.ci_summary.metrics:
+        commands_for_json.update(metric.command for metric in cfg.ci_summary.metrics)
+    command_results = _run_json_commands(cfg.commands, commands_for_json)
+    assertion_results = _run_check_assertions(cfg.checks_assertions, command_results)
+    summary_metrics = _evaluate_summary_metrics(
+        cfg.ci_summary.metrics if cfg.ci_summary else None,
+        command_results,
+    )
+    summary_markdown = None
+    if cfg.ci_summary and cfg.ci_summary.enabled:
+        summary_markdown = _render_summary_markdown(
+            title=cfg.ci_summary.title,
+            include_assertions=cfg.ci_summary.include_assertions,
+            assertions=assertion_results,
+            metrics=summary_metrics,
+        )
 
     if output_format == "json":
         if not ok_versions:
@@ -715,6 +1201,10 @@ def check(
         if not just_ok:
             drift = True
         if any(result["ok"] is False for result in plugin_results):
+            drift = True
+        if any(result["ok"] is False for result in assertion_results):
+            drift = True
+        if any(metric["ok"] is False for metric in summary_metrics):
             drift = True
 
         payload = {
@@ -741,6 +1231,12 @@ def check(
                 },
             ],
             "plugins": plugin_results,
+            "checks": assertion_results,
+            "report": {
+                "summary_enabled": bool(cfg.ci_summary and cfg.ci_summary.enabled),
+                "summary_markdown": summary_markdown,
+                "metrics": summary_metrics,
+            },
         }
         typer.echo(json.dumps(payload))
         raise typer.Exit(code=1 if drift else 0)
@@ -778,6 +1274,39 @@ def check(
             )
             if result["stderr"]:
                 typer.echo(f"  stderr: {result['stderr']}", err=True)
+
+    for result in assertion_results:
+        description = (
+            f"check assertion ({result['command']}): "
+            f"{result['path']} {result['op']} {result['expected']!r}"
+        )
+        if result["ok"]:
+            typer.echo(f"✓ {description} (actual={result['actual']!r})")
+            continue
+        drift = True
+        typer.echo(f"✗ [{ERR_CHECK}] {description}", err=True)
+        if result.get("message"):
+            typer.echo(f"  note: {result['message']}", err=True)
+        if result.get("reason"):
+            typer.echo(f"  reason: {result['reason']}", err=True)
+        if result.get("actual") is not None:
+            typer.echo(f"  actual: {result['actual']!r}", err=True)
+
+    for metric in summary_metrics:
+        metric_desc = f"summary metric ({metric['command']}): {metric['label']} @ {metric['path']}"
+        if metric["ok"]:
+            if metric["delta"] is not None:
+                typer.echo(
+                    f"✓ {metric_desc} value={metric['value']!r} "
+                    f"baseline={metric['baseline']!r} delta={metric['delta']!r}"
+                )
+            else:
+                typer.echo(f"✓ {metric_desc} value={metric['value']!r}")
+            continue
+        drift = True
+        typer.echo(f"✗ [{ERR_CHECK}] {metric_desc}", err=True)
+        if metric.get("reason"):
+            typer.echo(f"  reason: {metric['reason']}", err=True)
 
     if drift:
         typer.echo("\nHint: run `intent sync --write` to update generated files.", err=True)
