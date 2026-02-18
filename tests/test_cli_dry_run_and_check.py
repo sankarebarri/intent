@@ -35,9 +35,18 @@ def test_sync_dry_run_does_not_write_files(tmp_path: Path, monkeypatch) -> None:
 
     result = runner.invoke(app, ["sync", "--dry-run"])
     assert result.exit_code == 0
+    assert "Intent commands:" not in result.output
 
     assert not (tmp_path / ".github").exists()
     assert not (tmp_path / "justfile").exists()
+
+
+def test_sync_missing_intent_shows_init_fix_hint(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["sync"])
+    assert result.exit_code == 2
+    assert "[INTENT002]" in result.output
+    assert "Fix: run `intent init` to create a starter config." in result.output
 
 
 def test_check_fails_when_generated_files_missing(tmp_path: Path, monkeypatch) -> None:
@@ -363,6 +372,33 @@ def test_check_can_override_policy_strict_with_no_strict(tmp_path: Path, monkeyp
     assert "note: invalid requires-python value; version cross-check skipped" in result.output
 
 
+def test_check_uses_policy_pack_strict_by_default(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    intent_path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [policy]
+        pack = "strict"
+        """,
+    )
+
+    (tmp_path / "pyproject.toml").write_text("[project\n", encoding="utf-8")
+    cfg = load_intent(intent_path)
+    (tmp_path / ".github/workflows").mkdir(parents=True)
+    (tmp_path / ".github/workflows/ci.yml").write_text(render_ci(cfg), encoding="utf-8")
+    (tmp_path / "justfile").write_text(render_just(cfg), encoding="utf-8")
+
+    result = runner.invoke(app, ["check"])
+    assert result.exit_code == 1
+    assert "[INTENT101]" in result.output
+
+
 def test_sync_write_with_adopt_rejects_unowned_different_file(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     write_intent(
@@ -399,6 +435,7 @@ def test_sync_write_with_force_overwrites_unowned_file(tmp_path: Path, monkeypat
 
     result = runner.invoke(app, ["sync", "--write", "--force"])
     assert result.exit_code == 0
+    assert "Intent commands:" not in result.output
     cfg = load_intent(intent_path)
     assert (tmp_path / "justfile").read_text(encoding="utf-8") == render_just(cfg)
 
@@ -465,7 +502,9 @@ def test_check_json_includes_plugin_results(tmp_path: Path, monkeypatch) -> None
     assert data["plugins"][1]["stderr"] == "plugin-bad"
 
 
-def test_sync_write_runs_plugin_generate_hooks_and_fails_on_error(tmp_path: Path, monkeypatch) -> None:
+def test_sync_write_runs_plugin_generate_hooks_and_fails_on_error(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     write_intent(
         tmp_path,

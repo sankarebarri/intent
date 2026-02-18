@@ -26,7 +26,9 @@ def test_doctor_reports_missing_config_with_fix(tmp_path: Path, monkeypatch) -> 
     assert "Fix: run `intent init`" in result.output
 
 
-def test_doctor_reports_generated_file_drift_with_actionable_fix(tmp_path: Path, monkeypatch) -> None:
+def test_doctor_reports_generated_file_drift_with_actionable_fix(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     write_intent(
         tmp_path,

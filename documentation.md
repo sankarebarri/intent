@@ -33,6 +33,7 @@ python_versions = ["3.11", "3.12"]
 triggers = ["push", "pull_request"]
 
 [policy]
+pack = "default"
 strict = false
 
 [plugins]
@@ -65,10 +66,15 @@ Fields:
   - Optional
   - Non-empty array of workflow triggers
   - If omitted, CI defaults to `["push"]`
+- `[policy].pack`
+  - Optional
+  - Supported values: `default`, `strict`
+  - Provides team policy presets for default behavior
 - `[policy].strict`
   - Optional
   - Default: `false`
   - Controls default strictness for `intent check`
+  - If both are set, explicit `strict` overrides `pack` defaults
 - `[plugins].check`
   - Optional
   - Array of shell commands to run during `intent check`
@@ -90,8 +96,10 @@ Fields:
   - Overwrite existing `intent.toml`
 - `intent init --starter tox`
   - Also generate a tool-owned `tox.ini` starter file
+  - Reuses existing `intent.toml` unless `--force` is provided
 - `intent init --starter nox`
   - Also generate a tool-owned `noxfile.py` starter file
+  - Reuses existing `intent.toml` unless `--force` is provided
 - `intent show`
   - Print resolved config and pyproject inspection summary
 - `intent show --format json`

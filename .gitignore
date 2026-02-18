@@ -21,3 +21,8 @@ justfile
 
 /dist
 .pypirc
+
+# Local Intent files
+intent.toml
+tox.ini
+noxfile.py

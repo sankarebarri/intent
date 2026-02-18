@@ -287,6 +287,64 @@ def test_load_intent_rejects_non_boolean_policy_strict(
     assert "got str" in msg
 
 
+def test_load_intent_policy_pack_strict_sets_defaults(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [policy]
+        pack = "strict"
+        """,
+    )
+    cfg = load_intent(path)
+    assert cfg.policy_pack == "strict"
+    assert cfg.policy_strict is True
+
+
+def test_load_intent_policy_pack_allows_explicit_override(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [policy]
+        pack = "strict"
+        strict = false
+        """,
+    )
+    cfg = load_intent(path)
+    assert cfg.policy_pack == "strict"
+    assert cfg.policy_strict is False
+
+
+def test_load_intent_rejects_unknown_policy_pack(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [policy]
+        pack = "team-alpha"
+        """,
+    )
+    with pytest.raises(IntentConfigError) as excinfo:
+        load_intent(path)
+    assert "invalid [policy].pack" in str(excinfo.value)
+
+
 def test_load_intent_invalid_toml(
     tmp_path: Path,
 ) -> None:

@@ -108,7 +108,11 @@ def _check_versions(cfg_python: str, strict: bool) -> tuple[bool, str, str | Non
     if status == PyprojectPythonStatus.FILE_MISSING:
         return True, "note: pyproject.toml not found; version cross-check skipped", None
     if status == PyprojectPythonStatus.PROJECT_MISSING:
-        return True, "note: pyproject.toml has no [project] table; version cross-check skipped", None
+        return (
+            True,
+            "note: pyproject.toml has no [project] table; version cross-check skipped",
+            None,
+        )
     if status == PyprojectPythonStatus.REQUIRES_PYTHON_MISSING:
         return True, "note: [project].requires-python not set; version cross-check skipped", None
     if status == PyprojectPythonStatus.INVALID:
@@ -131,12 +135,20 @@ def _check_versions(cfg_python: str, strict: bool) -> tuple[bool, str, str | Non
             return True, f"note: Unsupported requires_python spec (skipping): {spec}", None
         if cfg_version is not None and spec_version == cfg_version:
             return True, f"pyproject requires_python matches intent ({spec})", None
-        return False, f"Version mismatch (simple spec): intent={cfg_python} vs pyproject={spec}", ERR_VERSION
+        return (
+            False,
+            f"Version mismatch (simple spec): intent={cfg_python} vs pyproject={spec}",
+            ERR_VERSION,
+        )
 
     # Range-ish spec: best-effort compatibility check
     result = check_requires_python_range(cfg_python, spec)
     if result is False:
-        return False, f"Version mismatch (range): intent {cfg_python} does not satisfy {spec}", ERR_VERSION
+        return (
+            False,
+            f"Version mismatch (range): intent {cfg_python} does not satisfy {spec}",
+            ERR_VERSION,
+        )
     if result is None:
         if strict:
             return False, f"Unsupported requires_python spec (strict): {spec}", ERR_VERSION
@@ -176,6 +188,7 @@ def _render_intent_template(python_version: str) -> str:
         'install = "-e .[dev]"',
         "",
         "[policy]",
+        'pack = "default"',
         "strict = false",
         "",
     ]
@@ -297,10 +310,7 @@ def _next_minor(version: str) -> str | None:
 def _upsert_pyproject_requires_python(path: Path, new_spec: str) -> tuple[bool, str]:
     if not path.exists():
         content = (
-            "[project]\n"
-            'name = "REPLACE_ME"\n'
-            'version = "0.0.0"\n'
-            f'requires-python = "{new_spec}"\n'
+            f'[project]\nname = "REPLACE_ME"\nversion = "0.0.0"\nrequires-python = "{new_spec}"\n'
         )
         path.write_text(content, encoding="utf-8")
         return True, "created"
@@ -406,21 +416,6 @@ def init(
     --from-existing: infer python version from pyproject.toml when possible.
     --force:         overwrite an existing intent.toml.
     """
-    path = Path(intent_path)
-    if path.exists() and not force:
-        typer.echo(
-            f"[{ERR_INIT_EXISTS}] Refusing to overwrite existing file: {path} (use --force)",
-            err=True,
-        )
-        raise typer.Exit(code=2)
-
-    python_version, source = _infer_init_python_version(from_existing)
-    content = _render_intent_template(python_version)
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-    typer.echo(f"Wrote {path}")
-
     starters = list(dict.fromkeys(starter))
     allowed_starters = {"tox", "nox"}
     invalid_starters = [item for item in starters if item not in allowed_starters]
@@ -432,10 +427,40 @@ def init(
             err=True,
         )
         raise typer.Exit(code=2)
+
+    path = Path(intent_path)
+    wrote_intent = False
+    python_version, source = _infer_init_python_version(from_existing)
+    if path.exists() and not force:
+        if not starters:
+            typer.echo(
+                f"[{ERR_INIT_EXISTS}] Refusing to overwrite existing file: {path} (use --force)",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        try:
+            existing_cfg = load_intent(path)
+            python_version = existing_cfg.python_version
+            typer.echo(f"Using existing {path}")
+        except FileNotFoundError as e:
+            typer.echo(f"[{ERR_CONFIG_NOT_FOUND}] Error: {e}", err=True)
+            raise typer.Exit(code=2)
+        except IntentConfigError as e:
+            typer.echo(f"[{ERR_CONFIG_INVALID}] Config error: {e}", err=True)
+            raise typer.Exit(code=2)
+    else:
+        content = _render_intent_template(python_version)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        wrote_intent = True
+        typer.echo(f"Wrote {path}")
+
     for item in starters:
         try:
             if item == "tox":
-                changed = write_generated_file(Path("tox.ini"), _render_tox_ini_template(python_version))
+                changed = write_generated_file(
+                    Path("tox.ini"), _render_tox_ini_template(python_version)
+                )
                 typer.echo("Wrote tox.ini" if changed else "No changes to tox.ini")
             elif item == "nox":
                 changed = write_generated_file(Path("noxfile.py"), _render_noxfile_template())
@@ -444,7 +469,7 @@ def init(
             typer.echo(f"[{ERR_OWNERSHIP}] {e}", err=True)
             raise typer.Exit(code=1)
 
-    if from_existing:
+    if from_existing and wrote_intent:
         typer.echo(f"python.version = {python_version} ({source})")
 
 
@@ -494,6 +519,7 @@ def show(
         "intent_path": str(path),
         "schema_version": cfg.schema_version,
         "python_version": cfg.python_version,
+        "policy_pack": cfg.policy_pack,
         "policy_strict": cfg.policy_strict,
         "ci_install": cfg.ci_install,
         "commands": cfg.commands,
@@ -510,6 +536,7 @@ def show(
     typer.echo(f"Intent path: {path}")
     typer.echo(f"Schema version: {cfg.schema_version}")
     typer.echo(f"Python version: {cfg.python_version}")
+    typer.echo(f"Policy pack: {cfg.policy_pack or 'none'}")
     typer.echo(f"Policy strict: {cfg.policy_strict}")
     typer.echo(f"CI install: {cfg.ci_install}")
     typer.echo("Commands:")
@@ -537,10 +564,14 @@ def sync(
     --write:   write tool-owned generated files
     """
     if write and dry_run:
-        typer.echo(f"[{ERR_USAGE_CONFLICT}] Error: --write and --dry-run cannot be used together", err=True)
+        typer.echo(
+            f"[{ERR_USAGE_CONFLICT}] Error: --write and --dry-run cannot be used together", err=True
+        )
         raise typer.Exit(code=2)
     if adopt and force:
-        typer.echo(f"[{ERR_USAGE_CONFLICT}] Error: --adopt and --force cannot be used together", err=True)
+        typer.echo(
+            f"[{ERR_USAGE_CONFLICT}] Error: --adopt and --force cannot be used together", err=True
+        )
         raise typer.Exit(code=2)
     if (adopt or force) and not write:
         typer.echo(f"[{ERR_USAGE_CONFLICT}] Error: --adopt/--force require --write", err=True)
@@ -552,15 +583,15 @@ def sync(
         cfg = load_intent(path)
     except FileNotFoundError as e:
         typer.echo(f"[{ERR_CONFIG_NOT_FOUND}] Error: {e}", err=True)
+        typer.echo("Fix: run `intent init` to create a starter config.", err=True)
         raise typer.Exit(code=2)
     except IntentConfigError as e:
         typer.echo(f"[{ERR_CONFIG_INVALID}] Config error: {e}", err=True)
         raise typer.Exit(code=2)
 
-    typer.echo(f"Intent python version: {cfg.python_version}")
-    typer.echo("Intent commands:")
-    for name, cmd in cfg.commands.items():
-        typer.echo(f"  {name} -> {cmd}")
+    if not write and not dry_run:
+        typer.echo(f"Intent python version: {cfg.python_version}")
+        typer.echo("Intent commands: " + ", ".join(cfg.commands.keys()))
 
     ok_versions, msg_versions, _ = _check_versions(cfg.python_version, strict=False)
     typer.echo(msg_versions)
@@ -872,14 +903,20 @@ def reconcile(
     if pyproject_status == PyprojectPythonStatus.FILE_MISSING:
         if apply:
             _, action = _upsert_pyproject_requires_python(pyproject_path, recommended_pyproject)
-            typer.echo(f"- {pyproject_path}: {action} ([project].requires-python={recommended_pyproject})")
+            typer.echo(
+                f"- {pyproject_path}: {action} ([project].requires-python={recommended_pyproject})"
+            )
         else:
             typer.echo(f"- {pyproject_path}: missing")
-            typer.echo(f"  action: create/update [project].requires-python = {recommended_pyproject}")
+            typer.echo(
+                f"  action: create/update [project].requires-python = {recommended_pyproject}"
+            )
     elif pyproject_status == PyprojectPythonStatus.PROJECT_MISSING:
         if apply and allow_existing:
             _, action = _upsert_pyproject_requires_python(pyproject_path, recommended_pyproject)
-            typer.echo(f"- {pyproject_path}: {action} ([project].requires-python={recommended_pyproject})")
+            typer.echo(
+                f"- {pyproject_path}: {action} ([project].requires-python={recommended_pyproject})"
+            )
         elif apply:
             unresolved = True
             typer.echo(f"- {pyproject_path}: skipped ([project] missing, use --allow-existing)")
@@ -889,10 +926,14 @@ def reconcile(
     elif pyproject_status == PyprojectPythonStatus.REQUIRES_PYTHON_MISSING:
         if apply and allow_existing:
             _, action = _upsert_pyproject_requires_python(pyproject_path, recommended_pyproject)
-            typer.echo(f"- {pyproject_path}: {action} ([project].requires-python={recommended_pyproject})")
+            typer.echo(
+                f"- {pyproject_path}: {action} ([project].requires-python={recommended_pyproject})"
+            )
         elif apply:
             unresolved = True
-            typer.echo(f"- {pyproject_path}: skipped (requires-python missing, use --allow-existing)")
+            typer.echo(
+                f"- {pyproject_path}: skipped (requires-python missing, use --allow-existing)"
+            )
         else:
             typer.echo(f"- {pyproject_path}: requires-python missing")
             typer.echo(f"  action: add requires-python = {recommended_pyproject}")
@@ -913,10 +954,14 @@ def reconcile(
         else:
             if apply and allow_existing:
                 _, action = _upsert_pyproject_requires_python(pyproject_path, recommended_pyproject)
-                typer.echo(f"- {pyproject_path}: {action} (requires-python={recommended_pyproject})")
+                typer.echo(
+                    f"- {pyproject_path}: {action} (requires-python={recommended_pyproject})"
+                )
             elif apply:
                 unresolved = True
-                typer.echo(f"- {pyproject_path}: skipped (drift={pyproject_spec}, use --allow-existing)")
+                typer.echo(
+                    f"- {pyproject_path}: skipped (drift={pyproject_spec}, use --allow-existing)"
+                )
             else:
                 typer.echo(f"- {pyproject_path}: drift (requires-python={pyproject_spec})")
                 typer.echo(f"  action: set requires-python = {recommended_pyproject}")
@@ -937,7 +982,10 @@ def reconcile(
             typer.echo(f"- {python_version_path}: {action} ({target})")
         elif apply:
             unresolved = True
-            typer.echo(f"- {python_version_path}: skipped (drift={python_version_current}, use --allow-existing)")
+            typer.echo(
+                f"- {python_version_path}: skipped "
+                f"(drift={python_version_current}, use --allow-existing)"
+            )
         else:
             typer.echo(f"- {python_version_path}: drift ({python_version_current})")
             typer.echo(f"  action: replace with {target}")
@@ -964,7 +1012,10 @@ def reconcile(
             typer.echo(f"- {tool_versions_path}: {action} (python {target})")
         elif apply:
             unresolved = True
-            typer.echo(f"- {tool_versions_path}: skipped (drift={tool_versions_current}, use --allow-existing)")
+            typer.echo(
+                f"- {tool_versions_path}: skipped "
+                f"(drift={tool_versions_current}, use --allow-existing)"
+            )
         else:
             typer.echo(f"- {tool_versions_path}: drift (python {tool_versions_current})")
             typer.echo(f"  action: set `python {target}`")
@@ -972,7 +1023,9 @@ def reconcile(
     typer.echo("")
     if apply:
         if unresolved:
-            typer.echo("Reconcile apply completed with skips. Re-run with `--allow-existing` where needed.")
+            typer.echo(
+                "Reconcile apply completed with skips. Re-run with `--allow-existing` where needed."
+            )
             raise typer.Exit(code=1)
         typer.echo("Reconcile apply completed.")
         raise typer.Exit(code=0)

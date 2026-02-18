@@ -11,6 +11,12 @@ DEFAULT_CI_INSTALL = "-e .[dev]"
 DEFAULT_CI_CACHE = "none"
 DEFAULT_SCHEMA_VERSION = 1
 DEFAULT_POLICY_STRICT = False
+POLICY_PACK_DEFAULT = "default"
+POLICY_PACK_STRICT = "strict"
+POLICY_PACKS: dict[str, dict[str, bool]] = {
+    POLICY_PACK_DEFAULT: {"strict": False},
+    POLICY_PACK_STRICT: {"strict": True},
+}
 
 
 class IntentConfigError(Exception):
@@ -39,6 +45,7 @@ class IntentConfig:
     ci_triggers: list[str] | None = None
     plugin_check_hooks: list[str] | None = None
     plugin_generate_hooks: list[str] | None = None
+    policy_pack: str | None = None
     policy_strict: bool = DEFAULT_POLICY_STRICT
     schema_version: int = DEFAULT_SCHEMA_VERSION
 
@@ -93,6 +100,17 @@ def load_raw_intent(path: Path) -> dict:
     if policy_section is not None:
         if not isinstance(policy_section, dict):
             raise _field_type_error(path, "[policy]", "table/object", policy_section)
+        raw_pack = policy_section.get("pack")
+        if raw_pack is not None:
+            if not isinstance(raw_pack, str) or not raw_pack.strip():
+                raise _field_type_error(path, "[policy].pack", "non-empty string", raw_pack)
+            policy_pack = raw_pack.strip()
+            if policy_pack not in POLICY_PACKS:
+                allowed = ", ".join(sorted(POLICY_PACKS))
+                raise IntentConfigError(
+                    f"{path}: invalid [policy].pack "
+                    f"(expected one of {allowed}, got {policy_pack!r})"
+                )
         raw_strict = policy_section.get("strict")
         if raw_strict is not None and not isinstance(raw_strict, bool):
             raise _field_type_error(path, "[policy].strict", "boolean", raw_strict)
@@ -179,7 +197,9 @@ def load_intent(path: Path) -> IntentConfig:
         raw_check_hooks = plugins_section.get("check")
         if raw_check_hooks is not None:
             if not isinstance(raw_check_hooks, list):
-                raise _field_type_error(path, "[plugins].check", "array of strings", raw_check_hooks)
+                raise _field_type_error(
+                    path, "[plugins].check", "array of strings", raw_check_hooks
+                )
             parsed_check_hooks: list[str] = []
             for idx, raw in enumerate(raw_check_hooks):
                 if not isinstance(raw, str) or not raw.strip():
@@ -209,9 +229,14 @@ def load_intent(path: Path) -> IntentConfig:
     if isinstance(intent_section, dict):
         schema_version = intent_section["schema_version"]
 
+    policy_pack: str | None = None
     policy_strict = DEFAULT_POLICY_STRICT
     policy_section = data.get("policy")
     if isinstance(policy_section, dict):
+        raw_pack = policy_section.get("pack")
+        if raw_pack is not None:
+            policy_pack = raw_pack.strip()
+            policy_strict = POLICY_PACKS[policy_pack]["strict"]
         raw_strict = policy_section.get("strict")
         if raw_strict is not None:
             policy_strict = raw_strict
@@ -226,5 +251,6 @@ def load_intent(path: Path) -> IntentConfig:
         ci_triggers=ci_triggers,
         plugin_check_hooks=plugin_check_hooks,
         plugin_generate_hooks=plugin_generate_hooks,
+        policy_pack=policy_pack,
         policy_strict=policy_strict,
     )

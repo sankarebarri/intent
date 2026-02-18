@@ -22,9 +22,9 @@ def test_init_creates_default_intent_file(tmp_path: Path, monkeypatch) -> None:
     content = (tmp_path / "intent.toml").read_text(encoding="utf-8")
     assert "[intent]" in content
     assert "schema_version = 1" in content
-    assert '[python]' in content
+    assert "[python]" in content
     assert 'version = "3.12"' in content
-    assert '[commands]' in content
+    assert "[commands]" in content
     assert "[policy]" in content
     assert "strict = false" in content
 
@@ -101,3 +101,25 @@ def test_init_starter_refuses_user_owned_existing_file(tmp_path: Path, monkeypat
     result = runner.invoke(app, ["init", "--starter", "tox"])
     assert result.exit_code == 1
     assert "[INTENT004]" in result.output
+
+
+def test_init_starter_uses_existing_intent_without_force(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "intent.toml").write_text(
+        """
+        [python]
+        version = "3.11"
+
+        [commands]
+        test = "pytest -q"
+        """,
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["init", "--starter", "tox"])
+    assert result.exit_code == 0
+    assert "Using existing intent.toml" in result.output
+    assert "Wrote tox.ini" in result.output
+
+    tox_content = (tmp_path / "tox.ini").read_text(encoding="utf-8")
+    assert "envlist = py311" in tox_content

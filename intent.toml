@@ -12,4 +12,5 @@ lint = "ruff check ."
 install = "-e .[dev]"
 
 [policy]
+pack = "default"
 strict = false

@@ -29,6 +29,7 @@ def test_show_text_outputs_resolved_config(tmp_path: Path, monkeypatch) -> None:
         test = "pytest -q"
 
         [policy]
+        pack = "strict"
         strict = true
         """,
     )
@@ -37,6 +38,7 @@ def test_show_text_outputs_resolved_config(tmp_path: Path, monkeypatch) -> None:
     assert result.exit_code == 0
     assert "Schema version: 1" in result.output
     assert "Python version: 3.12" in result.output
+    assert "Policy pack: strict" in result.output
     assert "Policy strict: True" in result.output
     assert "Commands:" in result.output
 
@@ -61,6 +63,7 @@ def test_show_json_outputs_machine_readable_payload(tmp_path: Path, monkeypatch)
     assert data["ok"] is True
     assert data["schema_version"] == 1
     assert data["python_version"] == "3.12"
+    assert data["policy_pack"] is None
     assert data["policy_strict"] is False
     assert data["commands"]["test"] == "pytest -q"
     assert "status" in data["pyproject"]
