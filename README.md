@@ -102,11 +102,6 @@ repos:
         pass_filenames: false
 ```
 
-## Release Note
-
-Current package version in this repo is `0.1.0` (`pyproject.toml`).
-If `0.1.0` is already published on PyPI, bump version before upload.
-
 ## License
 
 MIT
