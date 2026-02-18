@@ -37,6 +37,8 @@ def render_ci(cfg: IntentConfig) -> str:
         lines.append("          python-version: ${{ matrix.python-version }}")
     else:
         lines.append(f'          python-version: "{cfg.python_version}"')
+    if cfg.ci_cache == "pip":
+        lines.append("          cache: pip")
     lines.append("")
     lines.append("      - name: Install dependencies")
     lines.append("        run: |")

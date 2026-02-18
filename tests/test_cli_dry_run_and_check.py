@@ -273,6 +273,42 @@ def test_sync_rejects_conflicting_write_and_dry_run_with_code(tmp_path: Path, mo
     assert "[INTENT001]" in result.output
 
 
+def test_sync_rejects_conflicting_adopt_and_force(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+        """,
+    )
+
+    result = runner.invoke(app, ["sync", "--write", "--adopt", "--force"])
+    assert result.exit_code == 2
+    assert "[INTENT001]" in result.output
+
+
+def test_sync_rejects_adopt_without_write(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+        """,
+    )
+
+    result = runner.invoke(app, ["sync", "--adopt"])
+    assert result.exit_code == 2
+    assert "[INTENT001]" in result.output
+
+
 def test_check_uses_policy_strict_by_default(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     intent_path = write_intent(
@@ -325,3 +361,129 @@ def test_check_can_override_policy_strict_with_no_strict(tmp_path: Path, monkeyp
     result = runner.invoke(app, ["check", "--no-strict"])
     assert result.exit_code == 0
     assert "note: invalid requires-python value; version cross-check skipped" in result.output
+
+
+def test_sync_write_with_adopt_rejects_unowned_different_file(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+        """,
+    )
+    (tmp_path / "justfile").write_text("default:\n\t@echo user-owned\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["sync", "--write", "--adopt"])
+    assert result.exit_code == 1
+    assert "[INTENT004]" in result.output
+    assert "Refusing to adopt" in result.output
+
+
+def test_sync_write_with_force_overwrites_unowned_file(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    intent_path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+        """,
+    )
+    (tmp_path / "justfile").write_text("default:\n\t@echo user-owned\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["sync", "--write", "--force"])
+    assert result.exit_code == 0
+    cfg = load_intent(intent_path)
+    assert (tmp_path / "justfile").read_text(encoding="utf-8") == render_just(cfg)
+
+
+def test_check_runs_plugin_check_hooks_and_fails_on_error(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    intent_path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [plugins]
+        check = ["echo plugin-ok", "echo plugin-bad 1>&2; exit 7"]
+        """,
+    )
+
+    cfg = load_intent(intent_path)
+    (tmp_path / ".github/workflows").mkdir(parents=True)
+    (tmp_path / ".github/workflows/ci.yml").write_text(render_ci(cfg), encoding="utf-8")
+    (tmp_path / "justfile").write_text(render_just(cfg), encoding="utf-8")
+
+    result = runner.invoke(app, ["check"])
+    assert result.exit_code == 1
+    assert "✓ plugin check: echo plugin-ok" in result.output
+    assert "[INTENT301]" in result.output
+    assert "plugin check failed (7)" in result.output
+    assert "stderr: plugin-bad" in result.output
+
+
+def test_check_json_includes_plugin_results(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    intent_path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [plugins]
+        check = ["echo plugin-ok", "echo plugin-bad 1>&2; exit 5"]
+        """,
+    )
+
+    cfg = load_intent(intent_path)
+    (tmp_path / ".github/workflows").mkdir(parents=True)
+    (tmp_path / ".github/workflows/ci.yml").write_text(render_ci(cfg), encoding="utf-8")
+    (tmp_path / "justfile").write_text(render_just(cfg), encoding="utf-8")
+
+    result = runner.invoke(app, ["check", "--format", "json"])
+    assert result.exit_code == 1
+
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert len(data["plugins"]) == 2
+    assert data["plugins"][0]["ok"] is True
+    assert data["plugins"][1]["ok"] is False
+    assert data["plugins"][1]["code"] == "INTENT301"
+    assert data["plugins"][1]["stderr"] == "plugin-bad"
+
+
+def test_sync_write_runs_plugin_generate_hooks_and_fails_on_error(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [plugins]
+        generate = ["echo gen-ok", "echo gen-bad 1>&2; exit 9"]
+        """,
+    )
+
+    result = runner.invoke(app, ["sync", "--write"])
+    assert result.exit_code == 1
+    assert "✓ plugin generate: echo gen-ok" in result.output
+    assert "[INTENT301]" in result.output
+    assert "plugin generate failed (9)" in result.output
+    assert "stderr: gen-bad" in result.output

@@ -47,10 +47,12 @@ lint = "ruff check ."
 # used to generate and install dependencies in ci.yml
 [ci]
 install = "-e .[dev]"
+cache = "pip"
 python_versions = ["3.11", "3.12"]
 triggers = ["push", "pull_request"]
 # This value is used verbatim when generating CI install steps.
 # Intent does not infer dependencies, it only reflects what you declare.
+# Optional: dependency cache mode (`none` or `pip`).
 # Optional: when set, CI runs a matrix across these Python versions.
 # Optional: when set, CI uses these workflow triggers (default: ["push"]).
 
@@ -58,6 +60,12 @@ triggers = ["push", "pull_request"]
 strict = false
 # If true, `intent check` behaves like `intent check --strict` by default.
 # You can still override per-run with `--strict` / `--no-strict`.
+
+[plugins]
+check = ["./scripts/intent-check.sh"]
+generate = ["./scripts/intent-generate.sh"]
+# Optional: shell commands run during `intent check` (failures return `INTENT301`).
+# Optional: shell commands run after `intent sync --write` generation (failures return `INTENT301`).
 ```
 
 This file describes **agreements**, not implementations.
@@ -103,6 +111,11 @@ will:
 Intent uses `packaging` for `requires-python` evaluation, so common specifiers like
 `~=`, `==`, `!=`, `<=`, `>=`, and range combinations are supported.
 
+Unsupported `requires-python` behavior is explicit:
+
+- non-strict mode: emits a `note:` and skips compatibility enforcement for that spec
+- strict mode (`intent check --strict`): fails with `INTENT101`
+
 ---
 
 ### Generated Files (Tool-Owned)
@@ -129,6 +142,8 @@ All commands and what they do:
 | `intent init` | Create a starter `intent.toml`. |
 | `intent init --from-existing` | Create `intent.toml` and infer python version from `pyproject.toml` when possible. |
 | `intent init --force` | Overwrite existing `intent.toml`. |
+| `intent init --starter tox` | Also generate starter `tox.ini` (tool-owned). |
+| `intent init --starter nox` | Also generate starter `noxfile.py` (tool-owned). |
 | `intent show` | Show resolved config and environment inspection summary. |
 | `intent show --format json` | Show resolved config as JSON for automation/scripts. |
 | `intent sync` | Read `intent.toml` + `pyproject.toml` and show config + version check. |
@@ -136,10 +151,13 @@ All commands and what they do:
 | `intent sync --show-just` | `intent sync` plus preview generated justfile. |
 | `intent sync --dry-run` | Preview what would be written (no writes). |
 | `intent sync --write` | Write tool-owned files. |
+| `intent sync --write --adopt` | Adopt matching user-owned generated files into tool ownership. |
+| `intent sync --write --force` | Force-overwrite user-owned generated files with tool output. |
 | `intent check` | Check drift without writing. |
 | `intent check --strict` | Check drift with strict `requires_python` parsing. |
 | `intent check --no-strict` | Override config policy and run non-strict checks. |
 | `intent check --format json` | Check drift and emit machine-readable JSON. |
+| `intent doctor` | Diagnose common issues and print actionable fix hints. |
 | `intent reconcile --plan` | Preview Python-version reconciliation across `pyproject.toml`, `.python-version`, and `.tool-versions`. |
 | `intent reconcile --apply` | Apply reconciliation for missing files; skips existing-file edits unless opted in. |
 | `intent reconcile --apply --allow-existing` | Apply reconciliation including edits to existing version files. |
@@ -156,6 +174,8 @@ Expected output:
 | `intent init` | Writes `intent.toml` starter template (`python=3.12`, basic commands, CI install). |
 | `intent init --from-existing` | Writes template and attempts to infer python version from `pyproject.toml` (`requires-python`). |
 | `intent init --force` | Overwrites existing `intent.toml`. |
+| `intent init --starter tox` | Writes `tox.ini` starter (with generated marker) using the selected python version env tag. |
+| `intent init --starter nox` | Writes `noxfile.py` starter (with generated marker). |
 | `intent show` | Prints schema version, policy strictness, commands, and pyproject status. |
 | `intent show --format json` | Outputs machine-readable config summary and pyproject status. |
 | `intent sync` | Lines like `Intent python version: 3.12`, `Intent commands:`, `test -> pytest -q`, `Version ok (range): intent 3.12 satisfies >=3.10,<3.13`. |
@@ -163,10 +183,13 @@ Expected output:
 | `intent sync --show-just` | Same as `intent sync`, then `--- justfile (preview) ---` and rendered `justfile`. |
 | `intent sync --dry-run` | `--- dry-run ---`, then `Would write .github/workflows/ci.yml` and `Would update justfile` (or `No changes to ...`). If a file exists but is not tool-owned, shows `Cannot update ... not tool-owned`. |
 | `intent sync --write` | `Wrote .github/workflows/ci.yml` and `Wrote justfile` (or `No changes to ...`). |
-| `intent check` | `✓ Version ok (range): ...`, `✓ .github/workflows/ci.yml is up to date`, `✓ justfile is up to date`. |
+| `intent sync --write --adopt` | Adopts existing non-owned files only when their body matches generated content; otherwise exits with `INTENT004`. |
+| `intent sync --write --force` | Explicitly overwrites existing non-owned files with generated output. |
+| `intent check` | `✓ Version ok (range): ...`, `✓ .github/workflows/ci.yml is up to date`, `✓ justfile is up to date`; plugin checks print `✓ plugin check: ...` or fail with `INTENT301`. |
 | `intent check --strict` | Same as `intent check`, but unsupported specs are errors. |
 | `intent check --no-strict` | Forces non-strict behavior even when `[policy].strict = true`. |
 | `intent check --format json` | JSON object with `ok`, `versions`, and per-file drift status. Exit codes stay the same (`0/1/2`). |
+| `intent doctor` | Prints a diagnosis report and fix commands (for example `intent sync --write` or `intent init`). |
 | `intent reconcile --plan` | Prints a no-write plan showing `aligned`/`drift`/`missing` status and recommended actions for Python version files. |
 | `intent reconcile --apply` | Writes missing version files and reports skipped existing-file drifts (exit `1` when skips remain). |
 | `intent reconcile --apply --allow-existing` | Updates existing `pyproject.toml`, `.python-version`, and `.tool-versions` Python version entries. |
@@ -188,6 +211,7 @@ Intent emits stable error codes in text output (for failures) and JSON output (`
 | `INTENT201` | Required generated file is missing. |
 | `INTENT202` | Generated file exists but is not tool-owned. |
 | `INTENT203` | Generated file is out of date. |
+| `INTENT301` | Plugin hook command failed (`[plugins].check` or `[plugins].generate`). |
 
 ### Config Schema
 
@@ -197,8 +221,11 @@ Intent supports config schema:
 | --- | --- |
 | `[intent].schema_version = 1` | Current supported schema version. |
 | `[policy].strict = true/false` | Default strictness for `intent check` when no strict flag is passed. |
+| `[ci].cache = "none" or "pip"` | Optional dependency cache mode for generated CI setup-python step. |
 | `[ci].python_versions = ["3.11", "3.12"]` | Optional CI matrix versions. If omitted, CI uses `[python].version`. |
 | `[ci].triggers = ["push", "pull_request"]` | Optional CI workflow triggers. If omitted, CI defaults to `["push"]`. |
+| `[plugins].check = ["..."]` | Optional shell commands executed during `intent check`. Non-zero exit fails check. |
+| `[plugins].generate = ["..."]` | Optional shell commands executed after `intent sync --write`. Non-zero exit fails sync. |
 
 ## Bootstrapping (`intent init`)
 

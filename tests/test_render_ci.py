@@ -61,3 +61,13 @@ def test_render_ci_with_custom_triggers() -> None:
     )
     out = render_ci(cfg)
     assert "on: [push, pull_request]" in out
+
+
+def test_render_ci_with_pip_cache() -> None:
+    cfg = IntentConfig(
+        python_version="3.12",
+        commands={"test": "pytest -q"},
+        ci_cache="pip",
+    )
+    out = render_ci(cfg)
+    assert "cache: pip" in out

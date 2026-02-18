@@ -8,6 +8,7 @@ from pathlib import Path
 from .versioning import validate_python_version
 
 DEFAULT_CI_INSTALL = "-e .[dev]"
+DEFAULT_CI_CACHE = "none"
 DEFAULT_SCHEMA_VERSION = 1
 DEFAULT_POLICY_STRICT = False
 
@@ -16,13 +17,28 @@ class IntentConfigError(Exception):
     """Config error in intent.toml"""
 
 
+def _type_name(value: object) -> str:
+    if value is None:
+        return "null"
+    return type(value).__name__
+
+
+def _field_type_error(path: Path, field: str, expected: str, value: object) -> IntentConfigError:
+    return IntentConfigError(
+        f"{path}: invalid {field} (expected {expected}, got {_type_name(value)})"
+    )
+
+
 @dataclass
 class IntentConfig:
     python_version: str
     commands: dict[str, str]
     ci_install: str = DEFAULT_CI_INSTALL
+    ci_cache: str = DEFAULT_CI_CACHE
     ci_python_versions: list[str] | None = None
     ci_triggers: list[str] | None = None
+    plugin_check_hooks: list[str] | None = None
+    plugin_generate_hooks: list[str] | None = None
     policy_strict: bool = DEFAULT_POLICY_STRICT
     schema_version: int = DEFAULT_SCHEMA_VERSION
 
@@ -39,34 +55,34 @@ def load_raw_intent(path: Path) -> dict:
 
     python_section = data.get("python")
     if not isinstance(python_section, dict):
-        raise IntentConfigError("Missing [python] table in intent.toml")
+        raise _field_type_error(path, "[python]", "table/object", python_section)
 
     version = python_section.get("version")
     if not isinstance(version, str):
-        raise IntentConfigError("Missing or invalid python.version (expected a string)")
+        raise _field_type_error(path, "[python].version", "string", version)
 
     commands_section = data.get("commands")
     if not isinstance(commands_section, dict):
-        raise IntentConfigError("Missing [commands] table in intent.toml")
+        raise _field_type_error(path, "[commands]", "table/object", commands_section)
 
     if not commands_section:
         raise IntentConfigError("[commands] must define at least one command")
 
     for name, value in commands_section.items():
         if not isinstance(value, str):
-            raise IntentConfigError(f"[commands].{name} must be a string shell command")
+            raise _field_type_error(path, f"[commands].{name}", "string shell command", value)
         if not value.strip():
             raise IntentConfigError(f"[commands].{name} cannot be empty")
 
     intent_section = data.get("intent")
     if intent_section is not None:
         if not isinstance(intent_section, dict):
-            raise IntentConfigError("Invalid [intent] table: must be a table/object")
+            raise _field_type_error(path, "[intent]", "table/object", intent_section)
         raw_schema = intent_section.get("schema_version")
         if raw_schema is None:
             raise IntentConfigError("[intent].schema_version is required when [intent] is present")
         if not isinstance(raw_schema, int):
-            raise IntentConfigError("[intent].schema_version must be an integer")
+            raise _field_type_error(path, "[intent].schema_version", "integer", raw_schema)
         if raw_schema != DEFAULT_SCHEMA_VERSION:
             raise IntentConfigError(
                 f"Unsupported [intent].schema_version={raw_schema} "
@@ -76,10 +92,10 @@ def load_raw_intent(path: Path) -> dict:
     policy_section = data.get("policy")
     if policy_section is not None:
         if not isinstance(policy_section, dict):
-            raise IntentConfigError("Invalid [policy] table: must be a table/object")
+            raise _field_type_error(path, "[policy]", "table/object", policy_section)
         raw_strict = policy_section.get("strict")
         if raw_strict is not None and not isinstance(raw_strict, bool):
-            raise IntentConfigError("[policy].strict must be a boolean")
+            raise _field_type_error(path, "[policy].strict", "boolean", raw_strict)
 
     return data
 
@@ -102,17 +118,30 @@ def load_intent(path: Path) -> IntentConfig:
     commands = {k: v.strip() for k, v in dict(commands_section).items()}
 
     ci_install = DEFAULT_CI_INSTALL
+    ci_cache = DEFAULT_CI_CACHE
     ci_python_versions: list[str] | None = None
     ci_triggers: list[str] | None = None
+    plugin_check_hooks: list[str] | None = None
+    plugin_generate_hooks: list[str] | None = None
     ci_section = data.get("ci")
     if ci_section is not None:
         if not isinstance(ci_section, dict):
-            raise IntentConfigError("Invalid [ci] table: must be a table/object")
+            raise _field_type_error(path, "[ci]", "table/object", ci_section)
         raw_install = ci_section.get("install")
         if raw_install is not None:
             if not isinstance(raw_install, str) or not raw_install.strip():
-                raise IntentConfigError("[ci].install must be a non-empty string")
+                raise _field_type_error(path, "[ci].install", "non-empty string", raw_install)
             ci_install = raw_install.strip()
+        raw_cache = ci_section.get("cache")
+        if raw_cache is not None:
+            if not isinstance(raw_cache, str):
+                raise _field_type_error(path, "[ci].cache", "string ('none'|'pip')", raw_cache)
+            cache = raw_cache.strip().lower()
+            if cache not in ("none", "pip"):
+                raise IntentConfigError(
+                    f"{path}: invalid [ci].cache (expected one of 'none', 'pip', got {raw_cache!r})"
+                )
+            ci_cache = cache
         raw_versions = ci_section.get("python_versions")
         if raw_versions is not None:
             if not isinstance(raw_versions, list) or not raw_versions:
@@ -142,6 +171,39 @@ def load_intent(path: Path) -> IntentConfig:
                     )
                 parsed_triggers.append(raw.strip())
             ci_triggers = parsed_triggers
+
+    plugins_section = data.get("plugins")
+    if plugins_section is not None:
+        if not isinstance(plugins_section, dict):
+            raise _field_type_error(path, "[plugins]", "table/object", plugins_section)
+        raw_check_hooks = plugins_section.get("check")
+        if raw_check_hooks is not None:
+            if not isinstance(raw_check_hooks, list):
+                raise _field_type_error(path, "[plugins].check", "array of strings", raw_check_hooks)
+            parsed_check_hooks: list[str] = []
+            for idx, raw in enumerate(raw_check_hooks):
+                if not isinstance(raw, str) or not raw.strip():
+                    raise IntentConfigError(
+                        f"{path}: invalid [plugins].check[{idx}] "
+                        "(expected non-empty string command)"
+                    )
+                parsed_check_hooks.append(raw.strip())
+            plugin_check_hooks = parsed_check_hooks or None
+        raw_generate_hooks = plugins_section.get("generate")
+        if raw_generate_hooks is not None:
+            if not isinstance(raw_generate_hooks, list):
+                raise _field_type_error(
+                    path, "[plugins].generate", "array of strings", raw_generate_hooks
+                )
+            parsed_generate_hooks: list[str] = []
+            for idx, raw in enumerate(raw_generate_hooks):
+                if not isinstance(raw, str) or not raw.strip():
+                    raise IntentConfigError(
+                        f"{path}: invalid [plugins].generate[{idx}] "
+                        "(expected non-empty string command)"
+                    )
+                parsed_generate_hooks.append(raw.strip())
+            plugin_generate_hooks = parsed_generate_hooks or None
     schema_version = DEFAULT_SCHEMA_VERSION
     intent_section = data.get("intent")
     if isinstance(intent_section, dict):
@@ -159,7 +221,10 @@ def load_intent(path: Path) -> IntentConfig:
         python_version=python_version,
         commands=commands,
         ci_install=ci_install,
+        ci_cache=ci_cache,
         ci_python_versions=ci_python_versions,
         ci_triggers=ci_triggers,
+        plugin_check_hooks=plugin_check_hooks,
+        plugin_generate_hooks=plugin_generate_hooks,
         policy_strict=policy_strict,
     )

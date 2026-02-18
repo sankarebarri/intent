@@ -28,11 +28,16 @@ lint = "ruff check ."
 
 [ci]
 install = "-e .[dev]"
+cache = "pip"
 python_versions = ["3.11", "3.12"]
 triggers = ["push", "pull_request"]
 
 [policy]
 strict = false
+
+[plugins]
+check = ["./scripts/intent-check.sh"]
+generate = ["./scripts/intent-generate.sh"]
 ```
 
 Fields:
@@ -48,6 +53,10 @@ Fields:
 - `[ci].install`
   - Optional
   - Default: `-e .[dev]`
+- `[ci].cache`
+  - Optional
+  - Supported values: `none`, `pip`
+  - Default: `none`
 - `[ci].python_versions`
   - Optional
   - Non-empty array of Python versions for CI matrix
@@ -60,6 +69,14 @@ Fields:
   - Optional
   - Default: `false`
   - Controls default strictness for `intent check`
+- `[plugins].check`
+  - Optional
+  - Array of shell commands to run during `intent check`
+  - Any non-zero exit fails with `INTENT301`
+- `[plugins].generate`
+  - Optional
+  - Array of shell commands to run after `intent sync --write`
+  - Any non-zero exit fails with `INTENT301`
 
 ## Command Reference
 
@@ -71,6 +88,10 @@ Fields:
   - Infer Python version from existing `pyproject.toml` when possible
 - `intent init --force`
   - Overwrite existing `intent.toml`
+- `intent init --starter tox`
+  - Also generate a tool-owned `tox.ini` starter file
+- `intent init --starter nox`
+  - Also generate a tool-owned `noxfile.py` starter file
 - `intent show`
   - Print resolved config and pyproject inspection summary
 - `intent show --format json`
@@ -85,14 +106,22 @@ Fields:
   - Show what would be written
 - `intent sync --write`
   - Write generated files
+  - Then run optional `[plugins].generate` hooks
+- `intent sync --write --adopt`
+  - Adopt non-owned generated files only when existing body matches
+- `intent sync --write --force`
+  - Explicitly overwrite non-owned generated files
 - `intent check`
   - Detect drift without writing
+  - Also run optional `[plugins].check` hooks
 - `intent check --strict`
   - Strict version compatibility behavior
 - `intent check --no-strict`
   - Override strict default to non-strict
 - `intent check --format json`
   - Machine-readable drift report
+- `intent doctor`
+  - Diagnose common issues with actionable fix hints
 - `intent reconcile --plan`
   - Show Python version reconciliation plan
 - `intent reconcile --apply`
@@ -114,6 +143,13 @@ Rules:
 - `--apply` writes missing files.
 - Existing-file edits are skipped unless `--allow-existing` is set.
 
+## Unsupported `requires-python` Specs
+
+When `pyproject.toml` contains an unsupported or invalid `requires-python` value:
+
+- non-strict checks (`intent check` or `--no-strict`) emit a note and skip enforcement
+- strict checks (`intent check --strict`) fail with `INTENT101`
+
 ## Stable Error Codes
 
 - `INTENT001`: invalid option combination
@@ -125,6 +161,7 @@ Rules:
 - `INTENT201`: generated file missing
 - `INTENT202`: generated file not tool-owned
 - `INTENT203`: generated file out of date
+- `INTENT301`: plugin hook command failed
 
 ## Safety Model
 

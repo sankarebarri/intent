@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Literal
 
@@ -32,6 +33,7 @@ ERR_VERSION = "INTENT101"
 ERR_FILE_MISSING = "INTENT201"
 ERR_FILE_UNOWNED = "INTENT202"
 ERR_FILE_OUTDATED = "INTENT203"
+ERR_PLUGIN = "INTENT301"
 
 
 @app.callback()
@@ -70,6 +72,29 @@ def _generated_drift_status(path: Path, new_content: str) -> tuple[bool, str, st
     if existing != new_content:
         return False, f"{path} is out of date", ERR_FILE_OUTDATED
     return True, f"{path} is up to date", None
+
+
+def _run_plugin_hooks(hooks: list[str] | None, stage: str) -> list[dict]:
+    results: list[dict] = []
+    for command in hooks or []:
+        proc = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+        )
+        results.append(
+            {
+                "stage": stage,
+                "command": command,
+                "ok": proc.returncode == 0,
+                "exit_code": proc.returncode,
+                "stdout": proc.stdout.strip(),
+                "stderr": proc.stderr.strip(),
+                "code": None if proc.returncode == 0 else ERR_PLUGIN,
+            }
+        )
+    return results
 
 
 def _check_versions(cfg_python: str, strict: bool) -> tuple[bool, str, str | None]:
@@ -152,6 +177,49 @@ def _render_intent_template(python_version: str) -> str:
         "",
         "[policy]",
         "strict = false",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _python_env_tag(python_version: str) -> str:
+    parsed = parse_version(python_version)
+    if parsed is None or len(parsed) < 2:
+        return "py312"
+    return f"py{parsed[0]}{parsed[1]}"
+
+
+def _render_tox_ini_template(python_version: str) -> str:
+    env_tag = _python_env_tag(python_version)
+    lines = [
+        GENERATED_MARKER,
+        "# DO NOT EDIT",
+        "",
+        "[tox]",
+        f"envlist = {env_tag}",
+        "",
+        "[testenv]",
+        "deps =",
+        "    -e .[dev]",
+        "commands =",
+        "    pytest -q",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _render_noxfile_template() -> str:
+    lines = [
+        GENERATED_MARKER,
+        "# DO NOT EDIT",
+        "",
+        "import nox",
+        "",
+        "",
+        "@nox.session",
+        "def tests(session):",
+        '    session.install("-e", ".[dev]")',
+        '    session.run("pytest", "-q")',
         "",
     ]
     return "\n".join(lines)
@@ -326,6 +394,11 @@ def init(
     intent_path: str = "intent.toml",
     from_existing: bool = False,
     force: bool = False,
+    starter: list[str] = typer.Option(
+        [],
+        "--starter",
+        help="Optional starter files to generate: tox, nox (repeatable)",
+    ),
 ) -> None:
     """
     Create a starter intent.toml.
@@ -347,6 +420,30 @@ def init(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     typer.echo(f"Wrote {path}")
+
+    starters = list(dict.fromkeys(starter))
+    allowed_starters = {"tox", "nox"}
+    invalid_starters = [item for item in starters if item not in allowed_starters]
+    if invalid_starters:
+        invalid = ", ".join(invalid_starters)
+        typer.echo(
+            f"[{ERR_USAGE_CONFLICT}] Error: invalid --starter value(s): {invalid} "
+            "(expected: tox, nox)",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    for item in starters:
+        try:
+            if item == "tox":
+                changed = write_generated_file(Path("tox.ini"), _render_tox_ini_template(python_version))
+                typer.echo("Wrote tox.ini" if changed else "No changes to tox.ini")
+            elif item == "nox":
+                changed = write_generated_file(Path("noxfile.py"), _render_noxfile_template())
+                typer.echo("Wrote noxfile.py" if changed else "No changes to noxfile.py")
+        except OwnershipError as e:
+            typer.echo(f"[{ERR_OWNERSHIP}] {e}", err=True)
+            raise typer.Exit(code=1)
+
     if from_existing:
         typer.echo(f"python.version = {python_version} ({source})")
 
@@ -430,6 +527,8 @@ def sync(
     show_just: bool = False,
     write: bool = False,
     dry_run: bool = False,
+    adopt: bool = False,
+    force: bool = False,
 ) -> None:
     """
     Show config + versions. Optionally preview generated files, or write them.
@@ -439,6 +538,12 @@ def sync(
     """
     if write and dry_run:
         typer.echo(f"[{ERR_USAGE_CONFLICT}] Error: --write and --dry-run cannot be used together", err=True)
+        raise typer.Exit(code=2)
+    if adopt and force:
+        typer.echo(f"[{ERR_USAGE_CONFLICT}] Error: --adopt and --force cannot be used together", err=True)
+        raise typer.Exit(code=2)
+    if (adopt or force) and not write:
+        typer.echo(f"[{ERR_USAGE_CONFLICT}] Error: --adopt/--force require --write", err=True)
         raise typer.Exit(code=2)
 
     path = Path(intent_path)
@@ -480,15 +585,34 @@ def sync(
         raise typer.Exit(code=0)
 
     if write:
+        mode = "strict"
+        if adopt:
+            mode = "adopt"
+        elif force:
+            mode = "force"
         try:
-            ci_changed = write_generated_file(ci_path, ci_content)
-            just_changed = write_generated_file(just_path, just_content)
+            ci_changed = write_generated_file(ci_path, ci_content, mode=mode)
+            just_changed = write_generated_file(just_path, just_content, mode=mode)
         except OwnershipError as e:
             typer.echo(f"[{ERR_OWNERSHIP}] {e}", err=True)
             raise typer.Exit(code=1)
 
         typer.echo(f"Wrote {ci_path}" if ci_changed else f"No changes to {ci_path}")
         typer.echo(f"Wrote {just_path}" if just_changed else f"No changes to {just_path}")
+
+        hook_results = _run_plugin_hooks(cfg.plugin_generate_hooks, stage="generate")
+        for result in hook_results:
+            if result["ok"]:
+                typer.echo(f"✓ plugin generate: {result['command']}")
+                continue
+            typer.echo(
+                f"✗ [{ERR_PLUGIN}] plugin generate failed ({result['exit_code']}): "
+                f"{result['command']}",
+                err=True,
+            )
+            if result["stderr"]:
+                typer.echo(f"  stderr: {result['stderr']}", err=True)
+            raise typer.Exit(code=1)
 
 
 @app.command()
@@ -550,6 +674,7 @@ def check(
 
     ci_ok, ci_msg, ci_code = _generated_drift_status(ci_path, render_ci(cfg))
     just_ok, just_msg, just_code = _generated_drift_status(just_path, render_just(cfg))
+    plugin_results = _run_plugin_hooks(cfg.plugin_check_hooks, stage="check")
 
     if output_format == "json":
         if not ok_versions:
@@ -557,6 +682,8 @@ def check(
         if not ci_ok:
             drift = True
         if not just_ok:
+            drift = True
+        if any(result["ok"] is False for result in plugin_results):
             drift = True
 
         payload = {
@@ -582,6 +709,7 @@ def check(
                     "code": just_code,
                 },
             ],
+            "plugins": plugin_results,
         }
         typer.echo(json.dumps(payload))
         raise typer.Exit(code=1 if drift else 0)
@@ -607,10 +735,91 @@ def check(
         drift = True
         typer.echo(f"✗ [{just_code}] {just_msg}", err=True)
 
+    for result in plugin_results:
+        if result["ok"]:
+            typer.echo(f"✓ plugin check: {result['command']}")
+        else:
+            drift = True
+            typer.echo(
+                f"✗ [{ERR_PLUGIN}] plugin check failed ({result['exit_code']}): "
+                f"{result['command']}",
+                err=True,
+            )
+            if result["stderr"]:
+                typer.echo(f"  stderr: {result['stderr']}", err=True)
+
     if drift:
         typer.echo("\nHint: run `intent sync --write` to update generated files.", err=True)
         raise typer.Exit(code=1)
 
+    raise typer.Exit(code=0)
+
+
+@app.command()
+def doctor(
+    intent_path: str = "intent.toml",
+    strict: bool | None = typer.Option(None, "--strict/--no-strict"),
+) -> None:
+    """
+    Diagnose common Intent issues and suggest concrete fixes.
+
+    Exit codes:
+      0 = no issues
+      1 = issues found
+      2 = config/usage error
+    """
+    path = Path(intent_path)
+    try:
+        cfg = load_intent(path)
+    except FileNotFoundError as e:
+        typer.echo(f"[{ERR_CONFIG_NOT_FOUND}] Error: {e}", err=True)
+        typer.echo("Fix: run `intent init` to create a starter config.", err=True)
+        raise typer.Exit(code=2)
+    except IntentConfigError as e:
+        typer.echo(f"[{ERR_CONFIG_INVALID}] Config error: {e}", err=True)
+        typer.echo("Fix: open intent.toml and correct the invalid field/type.", err=True)
+        raise typer.Exit(code=2)
+
+    issues = False
+    effective_strict = cfg.policy_strict if strict is None else strict
+
+    typer.echo("--- doctor ---")
+    typer.echo(f"Intent path: {path}")
+
+    ok_versions, msg_versions, versions_code = _check_versions(
+        cfg.python_version,
+        strict=effective_strict,
+    )
+    if ok_versions:
+        typer.echo(f"✓ versions: {msg_versions}")
+    else:
+        issues = True
+        typer.echo(f"✗ [{versions_code}] versions: {msg_versions}", err=True)
+        typer.echo("  Fix: align [python].version with pyproject requires-python.", err=True)
+
+    file_checks = [
+        (Path(".github/workflows/ci.yml"), render_ci(cfg)),
+        (Path("justfile"), render_just(cfg)),
+    ]
+    for file_path, content in file_checks:
+        ok, message, code = _generated_drift_status(file_path, content)
+        if ok:
+            typer.echo(f"✓ {message}")
+            continue
+        issues = True
+        typer.echo(f"✗ [{code}] {message}", err=True)
+        if code in (ERR_FILE_MISSING, ERR_FILE_OUTDATED):
+            typer.echo("  Fix: run `intent sync --write`.", err=True)
+        elif code == ERR_FILE_UNOWNED:
+            typer.echo(
+                "  Fix: keep it user-owned or replace it explicitly with generated output.",
+                err=True,
+            )
+
+    if issues:
+        raise typer.Exit(code=1)
+
+    typer.echo("No issues found.")
     raise typer.Exit(code=0)
 
 

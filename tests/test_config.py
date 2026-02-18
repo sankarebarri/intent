@@ -63,8 +63,11 @@ def test_load_intent_missing_python(
     with pytest.raises(IntentConfigError) as excinfo:
         load_intent(path)
 
-    # our config.py raises: "Missing [python] table in content.toml"
-    assert "Missing [python]" in str(excinfo.value)
+    msg = str(excinfo.value)
+    assert "intent.toml" in msg
+    assert "invalid [python]" in msg
+    assert "expected table/object" in msg
+    assert "got null" in msg
 
 
 def test_load_intent_ci_install_default(
@@ -102,6 +105,43 @@ def test_load_intent_ci_install_custom(
     )
     cfg = load_intent(path)
     assert cfg.ci_install == ".[dev]"
+
+
+def test_load_intent_ci_cache_custom(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [ci]
+        cache = "pip"
+        """,
+    )
+    cfg = load_intent(path)
+    assert cfg.ci_cache == "pip"
+
+
+def test_load_intent_ci_cache_rejects_invalid_value(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [ci]
+        cache = "poetry"
+        """,
+    )
+    with pytest.raises(IntentConfigError) as excinfo:
+        load_intent(path)
+    assert "invalid [ci].cache" in str(excinfo.value)
 
 
 def test_load_intent_ci_python_versions_custom(tmp_path: Path) -> None:
@@ -241,7 +281,10 @@ def test_load_intent_rejects_non_boolean_policy_strict(
     )
     with pytest.raises(IntentConfigError) as excinfo:
         load_intent(path)
-    assert "[policy].strict must be a boolean" in str(excinfo.value)
+    msg = str(excinfo.value)
+    assert "invalid [policy].strict" in msg
+    assert "expected boolean" in msg
+    assert "got str" in msg
 
 
 def test_load_intent_invalid_toml(
@@ -259,3 +302,81 @@ def test_load_intent_invalid_toml(
         load_intent(path)
 
     assert "Invalid TOML" in str(excinfo.value)
+
+
+def test_load_intent_invalid_command_type_shows_expected_and_got(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = 123
+        """,
+    )
+    with pytest.raises(IntentConfigError) as excinfo:
+        load_intent(path)
+    msg = str(excinfo.value)
+    assert "intent.toml" in msg
+    assert "invalid [commands].test" in msg
+    assert "expected string shell command" in msg
+    assert "got int" in msg
+
+
+def test_load_intent_plugins_hooks_custom(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [plugins]
+        check = ["echo check-1", "echo check-2"]
+        generate = ["echo gen-1"]
+        """,
+    )
+    cfg = load_intent(path)
+    assert cfg.plugin_check_hooks == ["echo check-1", "echo check-2"]
+    assert cfg.plugin_generate_hooks == ["echo gen-1"]
+
+
+def test_load_intent_plugins_check_rejects_invalid_type(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [plugins]
+        check = "echo check"
+        """,
+    )
+    with pytest.raises(IntentConfigError) as excinfo:
+        load_intent(path)
+    assert "invalid [plugins].check" in str(excinfo.value)
+
+
+def test_load_intent_plugins_generate_rejects_empty_item(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        test = "pytest -q"
+
+        [plugins]
+        generate = [" "]
+        """,
+    )
+    with pytest.raises(IntentConfigError) as excinfo:
+        load_intent(path)
+    assert "invalid [plugins].generate[0]" in str(excinfo.value)
