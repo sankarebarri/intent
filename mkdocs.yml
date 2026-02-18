@@ -15,6 +15,11 @@ nav:
   - Home: index.md
   - Documentation Strategy: documentation-strategy.md
   - Getting Started: getting-started.md
+  - Usage:
+      - Overview: usage/overview.md
+      - Baseline Intent: usage/baseline-intent.md
+      - Quality Gates Intent: usage/quality-gates-intent.md
+      - Full CI Intent: usage/full-ci-intent.md
   - Configuration:
       - Schema: config/schema.md
       - Checks and Gates: config/checks-and-gates.md
@@ -24,6 +29,9 @@ nav:
   - Examples:
       - Generate Files and Drift: examples/generate-files.md
       - Metrics, Assertions, Gates: examples/metrics-and-gates.md
+      - Metrics Reference: examples/metrics-reference.md
+      - Complete Django Example: examples/django-complete.md
+      - Complete FastAPI Example: examples/fastapi-complete.md
   - Integrations:
       - Django and FastAPI: integrations/django-fastapi.md
       - Tool Integrations: integrations/tooling.md
