@@ -282,6 +282,49 @@ def test_load_intent_checks_assertions_rejects_invalid_operator(tmp_path: Path) 
     assert "invalid [checks].assertions[0].op" in str(excinfo.value)
 
 
+def test_load_intent_checks_gates_valid(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        audit = "cat audit.json"
+
+        [checks]
+        gates = [
+          { name = "pending migrations", kind = "threshold", command = "audit", path = "migrations.pending", max = 0 },
+          { kind = "equals", command = "audit", path = "status", value = "ok" }
+        ]
+        """,
+    )
+    cfg = load_intent(path)
+    assert cfg.checks_gates is not None
+    assert len(cfg.checks_gates) == 2
+    assert cfg.checks_gates[0].kind == "threshold"
+    assert cfg.checks_gates[1].kind == "equals"
+
+
+def test_load_intent_checks_gates_rejects_invalid_kind(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        audit = "cat audit.json"
+
+        [checks]
+        gates = [{ kind = "range", command = "audit", path = "status", value = "ok" }]
+        """,
+    )
+    with pytest.raises(IntentConfigError) as excinfo:
+        load_intent(path)
+    assert "invalid [checks].gates[0].kind" in str(excinfo.value)
+
+
 def test_load_intent_schema_and_policy_values(
     tmp_path: Path,
 ) -> None:
@@ -670,3 +713,25 @@ def test_load_intent_ci_summary_rejects_unknown_metric_command(tmp_path: Path) -
     with pytest.raises(IntentConfigError) as excinfo:
         load_intent(path)
     assert "invalid [ci].summary.metrics[0].command" in str(excinfo.value)
+
+
+def test_load_intent_ci_summary_baseline_file_requires_path(tmp_path: Path) -> None:
+    path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        eval = "cat metrics.json"
+
+        [ci.summary]
+        metrics = [{ label = "score", command = "eval", path = "metrics.score" }]
+
+        [ci.summary.baseline]
+        source = "file"
+        """,
+    )
+    with pytest.raises(IntentConfigError) as excinfo:
+        load_intent(path)
+    assert "[ci].summary.baseline.file is required when source='file'" in str(excinfo.value)

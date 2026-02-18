@@ -10,7 +10,7 @@ from typing import Literal
 import typer
 
 from . import __version__
-from .config import CheckAssertion, CiSummaryMetric, IntentConfigError, load_intent
+from .config import CheckAssertion, CheckGate, CiSummaryMetric, IntentConfigError, load_intent
 from .fs import GENERATED_MARKER, OwnershipError, write_generated_file
 from .pyproject_reader import PyprojectPythonStatus, read_pyproject_python
 from .render_ci import render_ci
@@ -35,6 +35,7 @@ ERR_FILE_UNOWNED = "INTENT202"
 ERR_FILE_OUTDATED = "INTENT203"
 ERR_PLUGIN = "INTENT301"
 ERR_CHECK = "INTENT401"
+ERR_LINT = "INTENT501"
 
 
 @app.callback()
@@ -286,6 +287,10 @@ def _apply_precision(value: object, precision: int | None) -> object:
 def _evaluate_summary_metrics(
     metrics: list[CiSummaryMetric] | None,
     command_results: dict[str, dict],
+    baseline_source: str = "current",
+    baseline_payload: object | None = None,
+    baseline_unavailable_reason: str | None = None,
+    baseline_on_missing: str = "fail",
 ) -> list[dict]:
     if not metrics:
         return []
@@ -334,21 +339,63 @@ def _evaluate_summary_metrics(
         delta = None
         reason: str | None = None
         if metric.baseline_path:
+            baseline_target: object | None = payload
+            if baseline_source == "file":
+                baseline_target = baseline_payload
+                if baseline_target is None:
+                    unavailable_reason = baseline_unavailable_reason or "baseline source unavailable"
+                    if baseline_on_missing == "skip":
+                        results.append(
+                            {
+                                **base,
+                                "ok": True,
+                                "value": _apply_precision(value, metric.precision),
+                                "baseline": None,
+                                "delta": None,
+                                "reason": unavailable_reason,
+                            }
+                        )
+                    else:
+                        results.append(
+                            {
+                                **base,
+                                "ok": False,
+                                "value": _apply_precision(value, metric.precision),
+                                "baseline": None,
+                                "delta": None,
+                                "reason": unavailable_reason,
+                                "code": ERR_CHECK,
+                            }
+                        )
+                    continue
+
             found_baseline, baseline_value, baseline_error = _resolve_json_path(
-                payload, metric.baseline_path
+                baseline_target, metric.baseline_path
             )
             if not found_baseline:
-                results.append(
-                    {
-                        **base,
-                        "ok": False,
-                        "value": _apply_precision(value, metric.precision),
-                        "baseline": None,
-                        "delta": None,
-                        "reason": baseline_error,
-                        "code": ERR_CHECK,
-                    }
-                )
+                if baseline_on_missing == "skip":
+                    results.append(
+                        {
+                            **base,
+                            "ok": True,
+                            "value": _apply_precision(value, metric.precision),
+                            "baseline": None,
+                            "delta": None,
+                            "reason": baseline_error,
+                        }
+                    )
+                else:
+                    results.append(
+                        {
+                            **base,
+                            "ok": False,
+                            "value": _apply_precision(value, metric.precision),
+                            "baseline": None,
+                            "delta": None,
+                            "reason": baseline_error,
+                            "code": ERR_CHECK,
+                        }
+                    )
                 continue
             baseline = baseline_value
             if _is_number(value) and _is_number(baseline):
@@ -367,6 +414,33 @@ def _evaluate_summary_metrics(
             }
         )
     return results
+
+
+def _load_summary_baseline(cfg: object) -> tuple[object | None, str | None, str, str]:
+    baseline_cfg = cfg.ci_summary.baseline if cfg.ci_summary else None
+    if baseline_cfg is None:
+        return None, None, "current", "fail"
+    if baseline_cfg.source == "current":
+        return None, None, "current", baseline_cfg.on_missing
+
+    assert baseline_cfg.source == "file"
+    baseline_file = Path(baseline_cfg.file or "")
+    if not baseline_file.exists():
+        return None, f"baseline source unavailable: {baseline_file} does not exist", "file", baseline_cfg.on_missing
+    try:
+        raw_text = baseline_file.read_text(encoding="utf-8")
+    except OSError as e:
+        return None, f"baseline source unavailable: {e}", "file", baseline_cfg.on_missing
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError as e:
+        return (
+            None,
+            f"baseline source unavailable: invalid JSON in {baseline_file} ({e.msg})",
+            "file",
+            baseline_cfg.on_missing,
+        )
+    return payload, None, "file", baseline_cfg.on_missing
 
 
 def _render_summary_markdown(
@@ -397,6 +471,44 @@ def _render_summary_markdown(
             lines.append(f"| {metric['label']} | {value} | {baseline} | {delta} |")
         lines.append("")
     return "\n".join(lines).rstrip()
+
+
+def _expand_gates_to_assertions(gates: list[CheckGate] | None) -> list[CheckAssertion]:
+    expanded: list[CheckAssertion] = []
+    for gate in gates or []:
+        prefix = f"[gate:{gate.name}] " if gate.name else ""
+        if gate.kind == "threshold":
+            if gate.min_value is not None:
+                expanded.append(
+                    CheckAssertion(
+                        command=gate.command,
+                        path=gate.path,
+                        op="gte",
+                        value=gate.min_value,
+                        message=(prefix + gate.message) if gate.message else None,
+                    )
+                )
+            if gate.max_value is not None:
+                expanded.append(
+                    CheckAssertion(
+                        command=gate.command,
+                        path=gate.path,
+                        op="lte",
+                        value=gate.max_value,
+                        message=(prefix + gate.message) if gate.message else None,
+                    )
+                )
+        elif gate.kind == "equals":
+            expanded.append(
+                CheckAssertion(
+                    command=gate.command,
+                    path=gate.path,
+                    op="eq",
+                    value=gate.equals_value,
+                    message=(prefix + gate.message) if gate.message else None,
+                )
+            )
+    return expanded
 
 
 def _resolved_payload(path: Path, cfg: object) -> dict:
@@ -450,6 +562,15 @@ def _resolved_payload(path: Path, cfg: object) -> dict:
                 "enabled": cfg.ci_summary.enabled,
                 "title": cfg.ci_summary.title,
                 "include_assertions": cfg.ci_summary.include_assertions,
+                "baseline": (
+                    {
+                        "source": cfg.ci_summary.baseline.source,
+                        "file": cfg.ci_summary.baseline.file,
+                        "on_missing": cfg.ci_summary.baseline.on_missing,
+                    }
+                    if cfg.ci_summary.baseline
+                    else None
+                ),
                 "metrics": [
                     {
                         "label": metric.label,
@@ -473,6 +594,19 @@ def _resolved_payload(path: Path, cfg: object) -> dict:
                 "message": assertion.message,
             }
             for assertion in (cfg.checks_assertions or [])
+        ],
+        "gates": [
+            {
+                "name": gate.name,
+                "kind": gate.kind,
+                "command": gate.command,
+                "path": gate.path,
+                "min": gate.min_value,
+                "max": gate.max_value,
+                "value": gate.equals_value,
+                "message": gate.message,
+            }
+            for gate in (cfg.checks_gates or [])
         ],
         "pyproject": {
             "status": pyproject_status.value,
@@ -988,6 +1122,16 @@ def show(
                 f"{assertion.command}: {assertion.path} {assertion.op} "
                 f"{assertion.value!r}"
             )
+    if cfg.checks_gates:
+        typer.echo("Gates:")
+        for gate in cfg.checks_gates:
+            if gate.kind == "threshold":
+                typer.echo(
+                    f"  {gate.command}: {gate.path} "
+                    f"min={gate.min_value!r} max={gate.max_value!r}"
+                )
+            else:
+                typer.echo(f"  {gate.command}: {gate.path} equals {gate.equals_value!r}")
     typer.echo(f"Pyproject status: {pyproject_status.value}")
     if pyproject_requires_python is not None:
         typer.echo(f"Pyproject requires-python: {pyproject_requires_python}")
@@ -1175,14 +1319,22 @@ def check(
     ci_ok, ci_msg, ci_code = _generated_drift_status(ci_path, render_ci(cfg))
     just_ok, just_msg, just_code = _generated_drift_status(just_path, render_just(cfg))
     plugin_results = _run_plugin_hooks(cfg.plugin_check_hooks, stage="check")
-    commands_for_json: set[str] = {item.command for item in (cfg.checks_assertions or [])}
+    all_assertions = [*(cfg.checks_assertions or []), *_expand_gates_to_assertions(cfg.checks_gates)]
+    commands_for_json: set[str] = {item.command for item in all_assertions}
     if cfg.ci_summary and cfg.ci_summary.metrics:
         commands_for_json.update(metric.command for metric in cfg.ci_summary.metrics)
     command_results = _run_json_commands(cfg.commands, commands_for_json)
-    assertion_results = _run_check_assertions(cfg.checks_assertions, command_results)
+    assertion_results = _run_check_assertions(all_assertions, command_results)
+    baseline_payload, baseline_unavailable_reason, baseline_source, baseline_on_missing = (
+        _load_summary_baseline(cfg)
+    )
     summary_metrics = _evaluate_summary_metrics(
         cfg.ci_summary.metrics if cfg.ci_summary else None,
         command_results,
+        baseline_source=baseline_source,
+        baseline_payload=baseline_payload,
+        baseline_unavailable_reason=baseline_unavailable_reason,
+        baseline_on_missing=baseline_on_missing,
     )
     summary_markdown = None
     if cfg.ci_summary and cfg.ci_summary.enabled:
@@ -1275,6 +1427,7 @@ def check(
             if result["stderr"]:
                 typer.echo(f"  stderr: {result['stderr']}", err=True)
 
+    grouped_failures: dict[tuple[str, str], list[dict]] = {}
     for result in assertion_results:
         description = (
             f"check assertion ({result['command']}): "
@@ -1282,6 +1435,12 @@ def check(
         )
         if result["ok"]:
             typer.echo(f"✓ {description} (actual={result['actual']!r})")
+            continue
+        reason = result.get("reason") or "assertion failed"
+        if reason.startswith("command failed with exit code") or reason.startswith(
+            "stdout is not valid JSON"
+        ):
+            grouped_failures.setdefault((result["command"], reason), []).append(result)
             continue
         drift = True
         typer.echo(f"✗ [{ERR_CHECK}] {description}", err=True)
@@ -1292,6 +1451,16 @@ def check(
         if result.get("actual") is not None:
             typer.echo(f"  actual: {result['actual']!r}", err=True)
 
+    for (command, reason), results in grouped_failures.items():
+        drift = True
+        typer.echo(
+            f"✗ [{ERR_CHECK}] check assertions ({command}) failed before evaluation",
+            err=True,
+        )
+        typer.echo(f"  reason: {reason}", err=True)
+        typer.echo(f"  affected assertions: {len(results)}", err=True)
+
+    grouped_metric_failures: dict[tuple[str, str], list[dict]] = {}
     for metric in summary_metrics:
         metric_desc = f"summary metric ({metric['command']}): {metric['label']} @ {metric['path']}"
         if metric["ok"]:
@@ -1303,10 +1472,24 @@ def check(
             else:
                 typer.echo(f"✓ {metric_desc} value={metric['value']!r}")
             continue
+        reason = metric.get("reason") or "metric evaluation failed"
+        if reason.startswith("command failed with exit code") or reason.startswith(
+            "stdout is not valid JSON"
+        ):
+            grouped_metric_failures.setdefault((metric["command"], reason), []).append(metric)
+            continue
         drift = True
         typer.echo(f"✗ [{ERR_CHECK}] {metric_desc}", err=True)
-        if metric.get("reason"):
-            typer.echo(f"  reason: {metric['reason']}", err=True)
+        typer.echo(f"  reason: {reason}", err=True)
+
+    for (command, reason), metrics in grouped_metric_failures.items():
+        drift = True
+        typer.echo(
+            f"✗ [{ERR_CHECK}] summary metrics ({command}) failed before evaluation",
+            err=True,
+        )
+        typer.echo(f"  reason: {reason}", err=True)
+        typer.echo(f"  affected metrics: {len(metrics)}", err=True)
 
     if drift:
         typer.echo("\nHint: run `intent sync --write` to update generated files.", err=True)
@@ -1559,6 +1742,80 @@ def reconcile(
         typer.echo("Reconcile apply completed.")
         raise typer.Exit(code=0)
     typer.echo("No files were modified. Use `intent reconcile --apply` to apply changes.")
+    raise typer.Exit(code=0)
+
+
+@app.command("lint-workflow")
+def lint_workflow(
+    intent_path: str = "intent.toml",
+    strict: bool = typer.Option(
+        False, "--strict", help="Exit non-zero when lint warnings are found"
+    ),
+) -> None:
+    """
+    Lint generated workflow semantics and emit actionable warnings.
+
+    Exit codes:
+      0 = no warnings (or warnings in non-strict mode)
+      1 = warnings found in strict mode
+      2 = config error
+    """
+    path = Path(intent_path)
+    try:
+        cfg = load_intent(path)
+    except FileNotFoundError as e:
+        typer.echo(f"[{ERR_CONFIG_NOT_FOUND}] Error: {e}", err=True)
+        raise typer.Exit(code=2)
+    except IntentConfigError as e:
+        typer.echo(f"[{ERR_CONFIG_INVALID}] Config error: {e}", err=True)
+        raise typer.Exit(code=2)
+
+    workflow = render_ci(cfg)
+    warnings: list[dict[str, str]] = []
+
+    if GENERATED_MARKER not in workflow:
+        warnings.append(
+            {
+                "message": "workflow is missing generated ownership marker",
+                "fix": "run `intent sync --write` to regenerate workflow",
+            }
+        )
+    if "\njobs:\n" not in workflow:
+        warnings.append(
+            {
+                "message": "workflow has no jobs block",
+                "fix": "define [commands] or [[ci.jobs]] in intent.toml",
+            }
+        )
+    if cfg.ci_summary and cfg.ci_summary.enabled and "GITHUB_STEP_SUMMARY" not in workflow:
+        warnings.append(
+            {
+                "message": "ci.summary is enabled but workflow has no summary writer step",
+                "fix": "run `intent sync --write` and verify generated ci.yml",
+            }
+        )
+    if cfg.ci_jobs:
+        for job in cfg.ci_jobs:
+            uses_checkout = any((step.uses or "").startswith("actions/checkout@") for step in (job.steps or []))
+            if not uses_checkout:
+                warnings.append(
+                    {
+                        "message": f"job {job.name!r} has no checkout step",
+                        "fix": f"add {{ uses = \"actions/checkout@v4\" }} to [[ci.jobs]] name={job.name!r}",
+                    }
+                )
+
+    typer.echo("--- lint-workflow ---")
+    if not warnings:
+        typer.echo("No workflow lint warnings.")
+        raise typer.Exit(code=0)
+
+    for item in warnings:
+        typer.echo(f"[{ERR_LINT}] Warning: {item['message']}")
+        typer.echo(f"  Fix: {item['fix']}")
+
+    if strict:
+        raise typer.Exit(code=1)
     raise typer.Exit(code=0)
 
 

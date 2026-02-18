@@ -531,6 +531,194 @@ def test_check_json_output_fails_on_invalid_summary_metric_path(tmp_path: Path, 
     assert data["report"]["metrics"][0]["ok"] is False
 
 
+def test_check_json_summary_metric_uses_file_baseline(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "metrics.json").write_text('{"metrics":{"score":0.93}}', encoding="utf-8")
+    (tmp_path / "baseline.json").write_text('{"metrics":{"score":0.90}}', encoding="utf-8")
+    intent_path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        eval = "cat metrics.json"
+
+        [ci.summary]
+        metrics = [{ label = "score", command = "eval", path = "metrics.score", baseline_path = "metrics.score", precision = 3 }]
+
+        [ci.summary.baseline]
+        source = "file"
+        file = "baseline.json"
+        on_missing = "fail"
+        """,
+    )
+    write_synced_generated_files(tmp_path, intent_path)
+    result = runner.invoke(app, ["check", "--format", "json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["report"]["metrics"][0]["delta"] == 0.03
+
+
+def test_check_json_summary_metric_missing_file_baseline_fails(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "metrics.json").write_text('{"metrics":{"score":0.93}}', encoding="utf-8")
+    intent_path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        eval = "cat metrics.json"
+
+        [ci.summary]
+        metrics = [{ label = "score", command = "eval", path = "metrics.score", baseline_path = "metrics.score", precision = 3 }]
+
+        [ci.summary.baseline]
+        source = "file"
+        file = "missing-baseline.json"
+        on_missing = "fail"
+        """,
+    )
+    write_synced_generated_files(tmp_path, intent_path)
+    result = runner.invoke(app, ["check", "--format", "json"])
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["report"]["metrics"][0]["ok"] is False
+    assert "baseline source unavailable" in data["report"]["metrics"][0]["reason"]
+
+
+def test_check_json_summary_metric_missing_file_baseline_skip_mode(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "metrics.json").write_text('{"metrics":{"score":0.93}}', encoding="utf-8")
+    intent_path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        eval = "cat metrics.json"
+
+        [ci.summary]
+        metrics = [{ label = "score", command = "eval", path = "metrics.score", baseline_path = "metrics.score", precision = 3 }]
+
+        [ci.summary.baseline]
+        source = "file"
+        file = "missing-baseline.json"
+        on_missing = "skip"
+        """,
+    )
+    write_synced_generated_files(tmp_path, intent_path)
+    result = runner.invoke(app, ["check", "--format", "json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["report"]["metrics"][0]["ok"] is True
+    assert data["report"]["metrics"][0]["delta"] is None
+    assert "baseline source unavailable" in data["report"]["metrics"][0]["reason"]
+
+
+def test_check_groups_repeated_command_failures_for_assertions(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    intent_path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        eval = "sh -c 'exit 2'"
+
+        [checks]
+        assertions = [
+          { command = "eval", path = "metrics.score", op = "gte", value = 0.9 },
+          { command = "eval", path = "status", op = "eq", value = "ok" }
+        ]
+        """,
+    )
+    write_synced_generated_files(tmp_path, intent_path)
+
+    result = runner.invoke(app, ["check"])
+    assert result.exit_code == 1
+    assert "failed before evaluation" in result.output
+    assert "affected assertions: 2" in result.output
+
+
+def test_check_json_keeps_full_results_when_command_failures_are_grouped_in_text(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    intent_path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        eval = "sh -c 'exit 2'"
+
+        [checks]
+        assertions = [
+          { command = "eval", path = "metrics.score", op = "gte", value = 0.9 },
+          { command = "eval", path = "status", op = "eq", value = "ok" }
+        ]
+
+        [ci.summary]
+        enabled = true
+        metrics = [
+          { label = "score", command = "eval", path = "metrics.score" },
+          { label = "status_ok", command = "eval", path = "status.ok" }
+        ]
+        """,
+    )
+    write_synced_generated_files(tmp_path, intent_path)
+
+    result = runner.invoke(app, ["check", "--format", "json"])
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert len(data["checks"]) == 2
+    assert all(item["ok"] is False for item in data["checks"])
+    assert len(data["report"]["metrics"]) == 2
+    assert all(item["ok"] is False for item in data["report"]["metrics"])
+
+
+def test_check_with_gates_passes_and_fails_as_expected(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "audit.json").write_text(
+        '{"migrations":{"pending":0},"checks":{"warnings":2},"status":"ok"}',
+        encoding="utf-8",
+    )
+    intent_path = write_intent(
+        tmp_path,
+        """
+        [python]
+        version = "3.12"
+
+        [commands]
+        audit = "cat audit.json"
+
+        [checks]
+        gates = [
+          { name = "migrations", kind = "threshold", command = "audit", path = "migrations.pending", max = 0 },
+          { name = "warnings", kind = "threshold", command = "audit", path = "checks.warnings", max = 5 },
+          { name = "status", kind = "equals", command = "audit", path = "status", value = "ok" }
+        ]
+        """,
+    )
+    write_synced_generated_files(tmp_path, intent_path)
+    result = runner.invoke(app, ["check"])
+    assert result.exit_code == 0
+
+    (tmp_path / "audit.json").write_text(
+        '{"migrations":{"pending":1},"checks":{"warnings":9},"status":"bad"}',
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["check"])
+    assert result.exit_code == 1
+    assert "[INTENT401]" in result.output
+
+
 def test_check_uses_policy_strict_by_default(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     intent_path = write_intent(

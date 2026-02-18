@@ -83,6 +83,21 @@ Fields:
     - `value`: expected value for comparison (required)
     - `message`: optional failure context
   - Commands referenced by assertions must exit `0` and emit valid JSON to stdout
+- `[checks].gates`
+  - Optional convenience layer over assertions
+  - Array of gate tables evaluated via generated typed assertions
+  - Gate fields:
+    - `kind` (required): `threshold` or `equals`
+    - `command` (required): command key from `[commands]`
+    - `path` (required): JSON path into command stdout payload
+    - `name` (optional): human label used in messages
+    - `message` (optional): failure context
+  - `threshold` gates:
+    - support `min` and/or `max`
+    - compile to `gte`/`lte` assertions
+  - `equals` gates:
+    - support `value`
+    - compile to `eq` assertions
 - `[ci].jobs`
   - Optional
   - Non-empty array of job tables (`[[ci.jobs]]`)
@@ -119,6 +134,10 @@ Fields:
     - `title` (optional string, default `Intent CI Summary`)
     - `include_assertions` (optional boolean, default `true`)
     - `metrics` (optional array of metric tables)
+    - `baseline` (optional table)
+      - `source`: `current` (default) or `file`
+      - `file`: required when `source = "file"`; path to baseline JSON
+      - `on_missing`: `fail` (default) or `skip`
   - Metric fields:
     - `label` (required)
     - `command` (required, must reference `[commands]`)
@@ -129,6 +148,7 @@ Fields:
     - baseline CI gets a summary step that writes markdown to `GITHUB_STEP_SUMMARY`
     - custom-job CI gets an additional `intent_summary` job
     - `intent check --format json` includes `report.summary_markdown` and `report.metrics`
+    - summary step writes only when `GITHUB_STEP_SUMMARY` is present in the environment
 - `[policy].pack`
   - Optional
   - Supported values: `default`, `strict`
@@ -158,6 +178,38 @@ eval = "cat metrics.json"
 [checks]
 assertions = [
   { command = "eval", path = "metrics.score", op = "gte", value = 0.9 }
+]
+```
+
+Checks gates convenience examples:
+
+```toml
+[commands]
+audit = "cat audit.json"
+
+[checks]
+gates = [
+  { name = "migrations", kind = "threshold", command = "audit", path = "migrations.pending", max = 0 },
+  { name = "warnings", kind = "threshold", command = "audit", path = "checks.warnings", max = 5 },
+  { name = "status", kind = "equals", command = "audit", path = "status", value = "ok" }
+]
+```
+
+Migration example (assertions -> gates):
+
+```toml
+# Before
+[checks]
+assertions = [
+  { command = "audit", path = "migrations.pending", op = "lte", value = 0 },
+  { command = "audit", path = "status", op = "eq", value = "ok" }
+]
+
+# After
+[checks]
+gates = [
+  { kind = "threshold", command = "audit", path = "migrations.pending", max = 0 },
+  { kind = "equals", command = "audit", path = "status", value = "ok" }
 ]
 ```
 
@@ -219,6 +271,21 @@ metrics = [
   { label = "score", command = "eval", path = "metrics.score", baseline_path = "metrics.prev_score", precision = 3 },
   { label = "latency_p95_ms", command = "eval", path = "perf.latency_p95", precision = 1 }
 ]
+```
+
+Summary baseline from file:
+
+```toml
+[ci.summary]
+enabled = true
+metrics = [
+  { label = "score", command = "eval", path = "metrics.score", baseline_path = "metrics.score", precision = 3 }
+]
+
+[ci.summary.baseline]
+source = "file"
+file = "baseline.json"
+on_missing = "fail" # or "skip"
 ```
 
 Multiple assertions with list membership and array indexing:
@@ -287,6 +354,11 @@ assertions = [
   - Override strict default to non-strict
 - `intent check --format json`
   - Machine-readable drift report
+- `intent lint-workflow`
+  - Lint generated workflow semantics and print actionable warnings
+  - Warnings do not fail by default
+- `intent lint-workflow --strict`
+  - Exit non-zero when lint warnings are found
 - `intent doctor`
   - Diagnose common issues with actionable fix hints
 - `intent reconcile --plan`
@@ -330,6 +402,7 @@ When `pyproject.toml` contains an unsupported or invalid `requires-python` value
 - `INTENT203`: generated file out of date
 - `INTENT301`: plugin hook command failed
 - `INTENT401`: check assertion failed
+- `INTENT501`: workflow lint warning
 
 ## Safety Model
 

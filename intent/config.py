@@ -22,7 +22,10 @@ CHECK_ASSERTION_OPERATORS = {
     "in",
     "not_in",
 }
+CHECK_GATE_KINDS = {"threshold", "equals"}
 CI_ARTIFACT_WHEN = {"always", "on-failure", "on-success"}
+CI_SUMMARY_BASELINE_SOURCE = {"current", "file"}
+CI_SUMMARY_BASELINE_ON_MISSING = {"fail", "skip"}
 POLICY_PACK_DEFAULT = "default"
 POLICY_PACK_STRICT = "strict"
 POLICY_PACKS: dict[str, dict[str, bool]] = {
@@ -53,6 +56,18 @@ class CheckAssertion:
     path: str
     op: str
     value: Any
+    message: str | None = None
+
+
+@dataclass
+class CheckGate:
+    kind: str
+    command: str
+    path: str
+    name: str | None = None
+    min_value: Any | None = None
+    max_value: Any | None = None
+    equals_value: Any | None = None
     message: str | None = None
 
 
@@ -99,11 +114,19 @@ class CiSummaryMetric:
 
 
 @dataclass
+class CiSummaryBaseline:
+    source: str = "current"
+    file: str | None = None
+    on_missing: str = "fail"
+
+
+@dataclass
 class CiSummary:
     enabled: bool = True
     title: str = "Intent CI Summary"
     include_assertions: bool = True
     metrics: list[CiSummaryMetric] | None = None
+    baseline: CiSummaryBaseline | None = None
 
 
 @dataclass
@@ -120,6 +143,7 @@ class IntentConfig:
     plugin_check_hooks: list[str] | None = None
     plugin_generate_hooks: list[str] | None = None
     checks_assertions: list[CheckAssertion] | None = None
+    checks_gates: list[CheckGate] | None = None
     policy_pack: str | None = None
     policy_strict: bool = DEFAULT_POLICY_STRICT
     schema_version: int = DEFAULT_SCHEMA_VERSION
@@ -220,6 +244,7 @@ def load_intent(path: Path) -> IntentConfig:
     plugin_check_hooks: list[str] | None = None
     plugin_generate_hooks: list[str] | None = None
     checks_assertions: list[CheckAssertion] | None = None
+    checks_gates: list[CheckGate] | None = None
     ci_section = data.get("ci")
     if ci_section is not None:
         if not isinstance(ci_section, dict):
@@ -715,11 +740,63 @@ def load_intent(path: Path) -> IntentConfig:
                     )
                 summary_metrics = parsed_metrics or None
 
+            baseline = CiSummaryBaseline()
+            raw_baseline = raw_summary.get("baseline")
+            if raw_baseline is not None:
+                if not isinstance(raw_baseline, dict):
+                    raise _field_type_error(
+                        path, "[ci].summary.baseline", "table/object", raw_baseline
+                    )
+                raw_source = raw_baseline.get("source")
+                if raw_source is not None:
+                    if not isinstance(raw_source, str) or not raw_source.strip():
+                        raise IntentConfigError(
+                            f"{path}: invalid [ci].summary.baseline.source "
+                            "(expected non-empty string)"
+                        )
+                    source = raw_source.strip()
+                    if source not in CI_SUMMARY_BASELINE_SOURCE:
+                        allowed = ", ".join(sorted(CI_SUMMARY_BASELINE_SOURCE))
+                        raise IntentConfigError(
+                            f"{path}: invalid [ci].summary.baseline.source "
+                            f"(expected one of {allowed}, got {source!r})"
+                        )
+                    baseline.source = source
+                raw_file = raw_baseline.get("file")
+                if raw_file is not None:
+                    if not isinstance(raw_file, str) or not raw_file.strip():
+                        raise IntentConfigError(
+                            f"{path}: invalid [ci].summary.baseline.file "
+                            "(expected non-empty string)"
+                        )
+                    baseline.file = raw_file.strip()
+                raw_on_missing = raw_baseline.get("on_missing")
+                if raw_on_missing is not None:
+                    if not isinstance(raw_on_missing, str) or not raw_on_missing.strip():
+                        raise IntentConfigError(
+                            f"{path}: invalid [ci].summary.baseline.on_missing "
+                            "(expected non-empty string)"
+                        )
+                    on_missing = raw_on_missing.strip()
+                    if on_missing not in CI_SUMMARY_BASELINE_ON_MISSING:
+                        allowed = ", ".join(sorted(CI_SUMMARY_BASELINE_ON_MISSING))
+                        raise IntentConfigError(
+                            f"{path}: invalid [ci].summary.baseline.on_missing "
+                            f"(expected one of {allowed}, got {on_missing!r})"
+                        )
+                    baseline.on_missing = on_missing
+
+            if baseline.source == "file" and not baseline.file:
+                raise IntentConfigError(
+                    f"{path}: [ci].summary.baseline.file is required when source='file'"
+                )
+
             ci_summary = CiSummary(
                 enabled=enabled,
                 title=title,
                 include_assertions=include_assertions,
                 metrics=summary_metrics,
+                baseline=baseline,
             )
 
     plugins_section = data.get("plugins")
@@ -836,6 +913,103 @@ def load_intent(path: Path) -> IntentConfig:
                     )
                 )
             checks_assertions = parsed_assertions or None
+        raw_gates = checks_section.get("gates")
+        if raw_gates is not None:
+            if not isinstance(raw_gates, list):
+                raise _field_type_error(path, "[checks].gates", "array of tables", raw_gates)
+            parsed_gates: list[CheckGate] = []
+            for idx, raw in enumerate(raw_gates):
+                if not isinstance(raw, dict):
+                    raise IntentConfigError(
+                        f"{path}: invalid [checks].gates[{idx}] (expected table/object)"
+                    )
+                raw_kind = raw.get("kind")
+                if not isinstance(raw_kind, str) or not raw_kind.strip():
+                    raise IntentConfigError(
+                        f"{path}: invalid [checks].gates[{idx}].kind "
+                        "(expected non-empty string)"
+                    )
+                kind = raw_kind.strip()
+                if kind not in CHECK_GATE_KINDS:
+                    allowed = ", ".join(sorted(CHECK_GATE_KINDS))
+                    raise IntentConfigError(
+                        f"{path}: invalid [checks].gates[{idx}].kind "
+                        f"(expected one of {allowed}, got {kind!r})"
+                    )
+
+                command = raw.get("command")
+                if not isinstance(command, str) or not command.strip():
+                    raise IntentConfigError(
+                        f"{path}: invalid [checks].gates[{idx}].command "
+                        "(expected non-empty string)"
+                    )
+                command = command.strip()
+                if command not in commands:
+                    raise IntentConfigError(
+                        f"{path}: invalid [checks].gates[{idx}].command "
+                        f"(unknown command {command!r})"
+                    )
+
+                gate_path = raw.get("path")
+                if not isinstance(gate_path, str) or not gate_path.strip():
+                    raise IntentConfigError(
+                        f"{path}: invalid [checks].gates[{idx}].path "
+                        "(expected non-empty string)"
+                    )
+                gate_path = gate_path.strip()
+
+                gate_name = raw.get("name")
+                if gate_name is not None and (not isinstance(gate_name, str) or not gate_name.strip()):
+                    raise IntentConfigError(
+                        f"{path}: invalid [checks].gates[{idx}].name "
+                        "(expected non-empty string)"
+                    )
+                message = raw.get("message")
+                if message is not None and (not isinstance(message, str) or not message.strip()):
+                    raise IntentConfigError(
+                        f"{path}: invalid [checks].gates[{idx}].message "
+                        "(expected non-empty string)"
+                    )
+
+                min_value = raw.get("min")
+                max_value = raw.get("max")
+                equals_value = raw.get("value")
+                if kind == "threshold":
+                    if "value" in raw:
+                        raise IntentConfigError(
+                            f"{path}: invalid [checks].gates[{idx}].value "
+                            "(not supported for kind='threshold'; use min/max)"
+                        )
+                    if "min" not in raw and "max" not in raw:
+                        raise IntentConfigError(
+                            f"{path}: invalid [checks].gates[{idx}] "
+                            "(kind='threshold' requires min or max)"
+                        )
+                if kind == "equals":
+                    if "value" not in raw:
+                        raise IntentConfigError(
+                            f"{path}: invalid [checks].gates[{idx}].value "
+                            "(kind='equals' requires value)"
+                        )
+                    if "min" in raw or "max" in raw:
+                        raise IntentConfigError(
+                            f"{path}: invalid [checks].gates[{idx}] "
+                            "(kind='equals' does not allow min/max)"
+                        )
+
+                parsed_gates.append(
+                    CheckGate(
+                        kind=kind,
+                        command=command,
+                        path=gate_path,
+                        name=gate_name.strip() if isinstance(gate_name, str) else None,
+                        min_value=min_value if "min" in raw else None,
+                        max_value=max_value if "max" in raw else None,
+                        equals_value=equals_value if "value" in raw else None,
+                        message=message.strip() if isinstance(message, str) else None,
+                    )
+                )
+            checks_gates = parsed_gates or None
     schema_version = DEFAULT_SCHEMA_VERSION
     intent_section = data.get("intent")
     if isinstance(intent_section, dict):
@@ -867,6 +1041,7 @@ def load_intent(path: Path) -> IntentConfig:
         plugin_check_hooks=plugin_check_hooks,
         plugin_generate_hooks=plugin_generate_hooks,
         checks_assertions=checks_assertions,
+        checks_gates=checks_gates,
         policy_pack=policy_pack,
         policy_strict=policy_strict,
     )

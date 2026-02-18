@@ -38,6 +38,7 @@ intent sync --write
 
 This bootstraps a baseline CI workflow and `justfile` from your `intent.toml`.
 If you configure `[checks].assertions`, `intent check` evaluates typed JSON assertions on command output.
+If you configure `[checks].gates`, Intent compiles high-level threshold/equality gates into typed assertions.
 If you configure `[[ci.jobs]]`, Intent generates workflow jobs from typed job/step definitions instead of the baseline single-job template.
 If you configure `[[ci.artifacts]]`, Intent generates upload steps for `actions/upload-artifact`.
 If you configure `[ci.summary]`, Intent can publish a built-in markdown summary to `GITHUB_STEP_SUMMARY`.
@@ -93,6 +94,8 @@ strict = false
 | `intent sync --write --force` | Force-overwrite non-owned generated files. |
 | `intent check` | Detect drift without writing. |
 | `intent check --format json` | Machine-readable drift report. |
+| `intent lint-workflow` | Lint generated workflow semantics and print actionable warnings. |
+| `intent lint-workflow --strict` | Fail when workflow lint warnings are found. |
 | `intent doctor` | Diagnose issues with actionable fixes. |
 | `intent reconcile --plan` | Preview Python-version reconciliation. |
 | `intent reconcile --apply --allow-existing` | Apply reconciliation including existing-file edits. |
@@ -138,6 +141,28 @@ title = "Quality Report"
 include_assertions = true
 metrics = [
   { label = "score", command = "eval", path = "metrics.score", baseline_path = "metrics.prev_score", precision = 3 }
+]
+```
+
+Optional baseline source for metric deltas:
+
+```toml
+[ci.summary.baseline]
+source = "file"
+file = "baseline.json"
+on_missing = "fail" # or "skip"
+```
+
+## Checks Gates (Convenience Layer)
+
+```toml
+[commands]
+audit = "cat audit.json"
+
+[checks]
+gates = [
+  { kind = "threshold", command = "audit", path = "migrations.pending", max = 0 },
+  { kind = "equals", command = "audit", path = "status", value = "ok" }
 ]
 ```
 

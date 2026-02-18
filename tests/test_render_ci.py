@@ -166,7 +166,8 @@ def test_render_ci_with_summary_step_baseline() -> None:
     out = render_ci(cfg)
     assert "name: Write intent summary" in out
     assert "intent check --format json > intent-check.json || true" in out
-    assert "Path('${GITHUB_STEP_SUMMARY}')" in out
+    assert "summary_path = os.environ.get('GITHUB_STEP_SUMMARY')" in out
+    assert "Path(summary_path).write_text(summary + '\\n', encoding='utf-8')" in out
 
 
 def test_render_ci_with_summary_job_for_custom_jobs() -> None:

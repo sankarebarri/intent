@@ -93,13 +93,15 @@ def _summary_step() -> CiStep:
             "intent check --format json > intent-check.json || true",
             "python - <<'PY'",
             "import json",
+            "import os",
             "from pathlib import Path",
             "payload = json.loads(Path('intent-check.json').read_text(encoding='utf-8'))",
             "report = payload.get('report') or {}",
             "summary = report.get('summary_markdown')",
             "if summary:",
-            "    github_summary = Path('${GITHUB_STEP_SUMMARY}')",
-            "    github_summary.write_text(summary + '\\n', encoding='utf-8')",
+            "    summary_path = os.environ.get('GITHUB_STEP_SUMMARY')",
+            "    if summary_path:",
+            "        Path(summary_path).write_text(summary + '\\n', encoding='utf-8')",
             "PY",
         ]
     )
