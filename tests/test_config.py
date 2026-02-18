@@ -228,10 +228,12 @@ def test_load_intent_checks_assertions_valid(tmp_path: Path) -> None:
         [commands]
         eval = "cat metrics.json"
 
-        [checks]
-        assertions = [
-          { command = "eval", path = "metrics.score", op = "gte", value = 0.9, message = "score gate" }
-        ]
+        [[checks.assertions]]
+        command = "eval"
+        path = "metrics.score"
+        op = "gte"
+        value = 0.9
+        message = "score gate"
         """,
     )
     cfg = load_intent(path)
@@ -292,11 +294,18 @@ def test_load_intent_checks_gates_valid(tmp_path: Path) -> None:
         [commands]
         audit = "cat audit.json"
 
-        [checks]
-        gates = [
-          { name = "pending migrations", kind = "threshold", command = "audit", path = "migrations.pending", max = 0 },
-          { kind = "equals", command = "audit", path = "status", value = "ok" }
-        ]
+        [[checks.gates]]
+        name = "pending migrations"
+        kind = "threshold"
+        command = "audit"
+        path = "migrations.pending"
+        max = 0
+
+        [[checks.gates]]
+        kind = "equals"
+        command = "audit"
+        path = "status"
+        value = "ok"
         """,
     )
     cfg = load_intent(path)
@@ -560,10 +569,10 @@ def test_load_intent_ci_jobs_valid(tmp_path: Path) -> None:
 
         [[ci.jobs]]
         name = "lint"
-        steps = [
-          { uses = "actions/checkout@v4" },
-          { command = "lint" }
-        ]
+        [[ci.jobs.steps]]
+        uses = "actions/checkout@v4"
+        [[ci.jobs.steps]]
+        command = "lint"
 
         [[ci.jobs]]
         name = "test"
@@ -571,11 +580,14 @@ def test_load_intent_ci_jobs_valid(tmp_path: Path) -> None:
         timeout_minutes = 20
         continue_on_error = true
         matrix = { python-version = ["3.11", "3.12"] }
-
-        steps = [
-          { uses = "actions/setup-python@v5", with = { python-version = "${{ matrix.python-version }}" } },
-          { command = "test", if = "${{ always() }}", working_directory = ".", env = { PYTHONUNBUFFERED = "1" } }
-        ]
+        [[ci.jobs.steps]]
+        uses = "actions/setup-python@v5"
+        with = { python-version = "${{ matrix.python-version }}" }
+        [[ci.jobs.steps]]
+        command = "test"
+        if = "${{ always() }}"
+        working_directory = "."
+        env = { PYTHONUNBUFFERED = "1" }
         """,
     )
     cfg = load_intent(path)
@@ -684,9 +696,12 @@ def test_load_intent_ci_summary_with_metrics_valid(tmp_path: Path) -> None:
         enabled = true
         title = "Quality Report"
         include_assertions = true
-        metrics = [
-          { label = "score", command = "eval", path = "metrics.score", baseline_path = "metrics.prev_score", precision = 3 }
-        ]
+        [[ci.summary.metrics]]
+        label = "score"
+        command = "eval"
+        path = "metrics.score"
+        baseline_path = "metrics.prev_score"
+        precision = 3
         """,
     )
     cfg = load_intent(path)

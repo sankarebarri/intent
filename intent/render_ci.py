@@ -13,7 +13,12 @@ def _yaml_scalar(value: object) -> str:
     return f'"{value}"'
 
 
-def _append_step(lines: list[str], step: CiStep, commands: dict[str, str], indent: str = "      ") -> None:
+def _append_step(
+    lines: list[str],
+    step: CiStep,
+    commands: dict[str, str],
+    indent: str = "      ",
+) -> None:
     lines.append(f"{indent}-")
     if step.name:
         lines.append(f"{indent}  name: {step.name}")
@@ -67,7 +72,11 @@ def _append_custom_job(lines: list[str], job: CiJob, commands: dict[str, str]) -
     lines.append("")
 
 
-def _append_artifact_steps(lines: list[str], artifacts: list[CiArtifact] | None, indent: str = "      ") -> None:
+def _append_artifact_steps(
+    lines: list[str],
+    artifacts: list[CiArtifact] | None,
+    indent: str = "      ",
+) -> None:
     if not artifacts:
         return
     when_to_if = {
@@ -166,7 +175,10 @@ def render_ci(cfg: IntentConfig) -> str:
                 needs=sorted([job.name for job in cfg.ci_jobs]),
                 steps=[
                     CiStep(uses="actions/checkout@v4"),
-                    CiStep(uses="actions/setup-python@v5", with_args={"python-version": cfg.python_version}),
+                    CiStep(
+                        uses="actions/setup-python@v5",
+                        with_args={"python-version": cfg.python_version},
+                    ),
                     CiStep(run="python -m pip install -U pip\npython -m pip install -e .[dev]"),
                     _summary_step(),
                 ],

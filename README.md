@@ -31,7 +31,7 @@ python -m pip install -e ".[docs]"
 mkdocs serve
 ```
 
-GitHub Pages publishing is configured via `.github/workflows/docs-pages.yml`.
+GitHub Pages publishing is configured via `.github/workflows/static.yml`.
 
 One-time repo setup:
 

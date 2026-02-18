@@ -390,7 +390,10 @@ def test_sync_rejects_show_json_with_write(tmp_path: Path, monkeypatch) -> None:
 
 def test_check_with_assertions_passes(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "metrics.json").write_text('{"metrics":{"score":0.95},"status":"ok"}', encoding="utf-8")
+    (tmp_path / "metrics.json").write_text(
+        '{"metrics":{"score":0.95},"status":"ok"}',
+        encoding="utf-8",
+    )
     intent_path = write_intent(
         tmp_path,
         """
@@ -427,10 +430,12 @@ def test_check_with_assertions_fails_when_threshold_misses(tmp_path: Path, monke
         [commands]
         eval = "cat metrics.json"
 
-        [checks]
-        assertions = [
-          { command = "eval", path = "metrics.score", op = "gte", value = 0.9, message = "score regression gate" }
-        ]
+        [[checks.assertions]]
+        command = "eval"
+        path = "metrics.score"
+        op = "gte"
+        value = 0.9
+        message = "score regression gate"
         """,
     )
     write_synced_generated_files(tmp_path, intent_path)
@@ -487,9 +492,13 @@ def test_check_json_output_includes_summary_metrics_delta(tmp_path: Path, monkey
         [ci.summary]
         enabled = true
         title = "Quality"
-        metrics = [
-          { label = "score", command = "eval", path = "metrics.score", baseline_path = "metrics.baseline_score", precision = 3 }
-        ]
+
+        [[ci.summary.metrics]]
+        label = "score"
+        command = "eval"
+        path = "metrics.score"
+        baseline_path = "metrics.baseline_score"
+        precision = 3
         """,
     )
     write_synced_generated_files(tmp_path, intent_path)
@@ -503,7 +512,9 @@ def test_check_json_output_includes_summary_metrics_delta(tmp_path: Path, monkey
     assert data["report"]["metrics"][0]["delta"] == 0.02
 
 
-def test_check_json_output_fails_on_invalid_summary_metric_path(tmp_path: Path, monkeypatch) -> None:
+def test_check_json_output_fails_on_invalid_summary_metric_path(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / "metrics.json").write_text('{"metrics":{"score":0.91}}', encoding="utf-8")
     intent_path = write_intent(
@@ -545,7 +556,12 @@ def test_check_json_summary_metric_uses_file_baseline(tmp_path: Path, monkeypatc
         eval = "cat metrics.json"
 
         [ci.summary]
-        metrics = [{ label = "score", command = "eval", path = "metrics.score", baseline_path = "metrics.score", precision = 3 }]
+        [[ci.summary.metrics]]
+        label = "score"
+        command = "eval"
+        path = "metrics.score"
+        baseline_path = "metrics.score"
+        precision = 3
 
         [ci.summary.baseline]
         source = "file"
@@ -573,7 +589,12 @@ def test_check_json_summary_metric_missing_file_baseline_fails(tmp_path: Path, m
         eval = "cat metrics.json"
 
         [ci.summary]
-        metrics = [{ label = "score", command = "eval", path = "metrics.score", baseline_path = "metrics.score", precision = 3 }]
+        [[ci.summary.metrics]]
+        label = "score"
+        command = "eval"
+        path = "metrics.score"
+        baseline_path = "metrics.score"
+        precision = 3
 
         [ci.summary.baseline]
         source = "file"
@@ -589,7 +610,9 @@ def test_check_json_summary_metric_missing_file_baseline_fails(tmp_path: Path, m
     assert "baseline source unavailable" in data["report"]["metrics"][0]["reason"]
 
 
-def test_check_json_summary_metric_missing_file_baseline_skip_mode(tmp_path: Path, monkeypatch) -> None:
+def test_check_json_summary_metric_missing_file_baseline_skip_mode(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / "metrics.json").write_text('{"metrics":{"score":0.93}}', encoding="utf-8")
     intent_path = write_intent(
@@ -602,7 +625,12 @@ def test_check_json_summary_metric_missing_file_baseline_skip_mode(tmp_path: Pat
         eval = "cat metrics.json"
 
         [ci.summary]
-        metrics = [{ label = "score", command = "eval", path = "metrics.score", baseline_path = "metrics.score", precision = 3 }]
+        [[ci.summary.metrics]]
+        label = "score"
+        command = "eval"
+        path = "metrics.score"
+        baseline_path = "metrics.score"
+        precision = 3
 
         [ci.summary.baseline]
         source = "file"
@@ -698,12 +726,26 @@ def test_check_with_gates_passes_and_fails_as_expected(tmp_path: Path, monkeypat
         [commands]
         audit = "cat audit.json"
 
-        [checks]
-        gates = [
-          { name = "migrations", kind = "threshold", command = "audit", path = "migrations.pending", max = 0 },
-          { name = "warnings", kind = "threshold", command = "audit", path = "checks.warnings", max = 5 },
-          { name = "status", kind = "equals", command = "audit", path = "status", value = "ok" }
-        ]
+        [[checks.gates]]
+        name = "migrations"
+        kind = "threshold"
+        command = "audit"
+        path = "migrations.pending"
+        max = 0
+
+        [[checks.gates]]
+        name = "warnings"
+        kind = "threshold"
+        command = "audit"
+        path = "checks.warnings"
+        max = 5
+
+        [[checks.gates]]
+        name = "status"
+        kind = "equals"
+        command = "audit"
+        path = "status"
+        value = "ok"
         """,
     )
     write_synced_generated_files(tmp_path, intent_path)

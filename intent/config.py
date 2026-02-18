@@ -483,7 +483,8 @@ def load_intent(path: Path) -> IntentConfig:
                         for key, val in raw_with.items():
                             if not isinstance(key, str) or not key.strip():
                                 raise IntentConfigError(
-                                    f"{path}: invalid [ci].jobs[{job_idx}].steps[{step_idx}].with key "
+                                    f"{path}: invalid [ci].jobs[{job_idx}].steps[{step_idx}]."
+                                    "with key "
                                     "(expected non-empty string)"
                                 )
                             if not isinstance(val, str) or not val.strip():
@@ -536,7 +537,8 @@ def load_intent(path: Path) -> IntentConfig:
                         for key, val in raw_env.items():
                             if not isinstance(key, str) or not key.strip():
                                 raise IntentConfigError(
-                                    f"{path}: invalid [ci].jobs[{job_idx}].steps[{step_idx}].env key "
+                                    f"{path}: invalid [ci].jobs[{job_idx}].steps[{step_idx}]."
+                                    "env key "
                                     "(expected non-empty string)"
                                 )
                             if not isinstance(val, str):
@@ -959,7 +961,9 @@ def load_intent(path: Path) -> IntentConfig:
                 gate_path = gate_path.strip()
 
                 gate_name = raw.get("name")
-                if gate_name is not None and (not isinstance(gate_name, str) or not gate_name.strip()):
+                if gate_name is not None and (
+                    not isinstance(gate_name, str) or not gate_name.strip()
+                ):
                     raise IntentConfigError(
                         f"{path}: invalid [checks].gates[{idx}].name "
                         "(expected non-empty string)"

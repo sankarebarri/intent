@@ -175,7 +175,11 @@ def _resolve_json_path(payload: object, path: str) -> tuple[bool, object | None,
     for token in tokens:
         if isinstance(token, str):
             if not isinstance(cur, dict):
-                return False, None, f"path segment {token!r} expects object, got {type(cur).__name__}"
+                return (
+                    False,
+                    None,
+                    f"path segment {token!r} expects object, got {type(cur).__name__}",
+                )
             if token not in cur:
                 return False, None, f"path segment {token!r} missing"
             cur = cur[token]
@@ -343,7 +347,9 @@ def _evaluate_summary_metrics(
             if baseline_source == "file":
                 baseline_target = baseline_payload
                 if baseline_target is None:
-                    unavailable_reason = baseline_unavailable_reason or "baseline source unavailable"
+                    unavailable_reason = (
+                        baseline_unavailable_reason or "baseline source unavailable"
+                    )
                     if baseline_on_missing == "skip":
                         results.append(
                             {
@@ -426,7 +432,12 @@ def _load_summary_baseline(cfg: object) -> tuple[object | None, str | None, str,
     assert baseline_cfg.source == "file"
     baseline_file = Path(baseline_cfg.file or "")
     if not baseline_file.exists():
-        return None, f"baseline source unavailable: {baseline_file} does not exist", "file", baseline_cfg.on_missing
+        return (
+            None,
+            f"baseline source unavailable: {baseline_file} does not exist",
+            "file",
+            baseline_cfg.on_missing,
+        )
     try:
         raw_text = baseline_file.read_text(encoding="utf-8")
     except OSError as e:
@@ -1169,7 +1180,10 @@ def sync(
         typer.echo(f"[{ERR_USAGE_CONFLICT}] Error: --adopt/--force require --write", err=True)
         raise typer.Exit(code=2)
     if (show_json or explain) and write:
-        typer.echo(f"[{ERR_USAGE_CONFLICT}] Error: --show-json/--explain cannot be used with --write", err=True)
+        typer.echo(
+            f"[{ERR_USAGE_CONFLICT}] Error: --show-json/--explain cannot be used with --write",
+            err=True,
+        )
         raise typer.Exit(code=2)
 
     path = Path(intent_path)
@@ -1319,7 +1333,10 @@ def check(
     ci_ok, ci_msg, ci_code = _generated_drift_status(ci_path, render_ci(cfg))
     just_ok, just_msg, just_code = _generated_drift_status(just_path, render_just(cfg))
     plugin_results = _run_plugin_hooks(cfg.plugin_check_hooks, stage="check")
-    all_assertions = [*(cfg.checks_assertions or []), *_expand_gates_to_assertions(cfg.checks_gates)]
+    all_assertions = [
+        *(cfg.checks_assertions or []),
+        *_expand_gates_to_assertions(cfg.checks_gates),
+    ]
     commands_for_json: set[str] = {item.command for item in all_assertions}
     if cfg.ci_summary and cfg.ci_summary.metrics:
         commands_for_json.update(metric.command for metric in cfg.ci_summary.metrics)
@@ -1796,12 +1813,18 @@ def lint_workflow(
         )
     if cfg.ci_jobs:
         for job in cfg.ci_jobs:
-            uses_checkout = any((step.uses or "").startswith("actions/checkout@") for step in (job.steps or []))
+            uses_checkout = any(
+                (step.uses or "").startswith("actions/checkout@")
+                for step in (job.steps or [])
+            )
             if not uses_checkout:
                 warnings.append(
                     {
                         "message": f"job {job.name!r} has no checkout step",
-                        "fix": f"add {{ uses = \"actions/checkout@v4\" }} to [[ci.jobs]] name={job.name!r}",
+                        "fix": (
+                            "add { uses = \"actions/checkout@v4\" } "
+                            f"to [[ci.jobs]] name={job.name!r}"
+                        ),
                     }
                 )
 

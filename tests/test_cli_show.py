@@ -151,7 +151,9 @@ def test_show_json_includes_ci_summary_when_configured(tmp_path: Path, monkeypat
     assert data["ci_summary"]["title"] == "Quality"
 
 
-def test_show_json_includes_ci_summary_baseline_when_configured(tmp_path: Path, monkeypatch) -> None:
+def test_show_json_includes_ci_summary_baseline_when_configured(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     write_intent(
         tmp_path,
@@ -163,7 +165,11 @@ def test_show_json_includes_ci_summary_baseline_when_configured(tmp_path: Path, 
         eval = "cat metrics.json"
 
         [ci.summary]
-        metrics = [{ label = "score", command = "eval", path = "metrics.score", baseline_path = "metrics.score" }]
+        [[ci.summary.metrics]]
+        label = "score"
+        command = "eval"
+        path = "metrics.score"
+        baseline_path = "metrics.score"
 
         [ci.summary.baseline]
         source = "file"
